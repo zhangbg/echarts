@@ -17,9 +17,9 @@ define(function(require) {
 
     var workerUrl;
 
-    function getToken() {
-        return Math.round(Date.now() / 100) % 10000000;
-    }
+    // function getToken() {
+    //     return Math.round((new Date()).getTime() / 100) % 10000000;
+    // }
 
     function createWorkerUrl() {
         if (
@@ -53,6 +53,9 @@ define(function(require) {
         this.gravity = typeof(opts.gravity) !== 'undefined'
                         ? opts.gravity : 1;
         this.large = opts.large || false;
+        this.preventNodeOverlap = opts.preventNodeOverlap || false;
+        this.preventNodeEdgeOverlap = opts.preventNodeEdgeOverlap || false;
+        this.maxSpeedIncrease = opts.maxSpeedIncrease || 1;
 
         this.onupdate = opts.onupdate || function () {};
         this.temperature = opts.temperature || 1;
@@ -61,14 +64,12 @@ define(function(require) {
         this._layout = null;
         this._layoutWorker = null;
 
-        this._token = 0;
-
         var self = this;
         var _$onupdate = this._$onupdate;
         this._$onupdate = function(e) {
             _$onupdate.call(self, e);
-        }
-    }
+        };
+    };
 
     ForceLayout.prototype.updateConfig = function () {
         var width = this.width;
@@ -81,7 +82,11 @@ define(function(require) {
             height: this.ratioScaling ? height : size,
             scaling: this.scaling || 1.0,
             gravity: this.gravity || 1.0,
-            barnesHutOptimize: this.large
+            barnesHutOptimize: this.large,
+            preventNodeOverlap: this.preventNodeOverlap,
+            preventNodeEdgeOverlap: this.preventNodeEdgeOverlap,
+            
+            maxSpeedIncrease: this.maxSpeedIncrease
         };
 
         if (this._layoutWorker) {
@@ -95,9 +100,13 @@ define(function(require) {
                 this._layout[name] = config[name];
             }
         }
-    }
+    };
 
-    ForceLayout.prototype.init = function(graph, useWorker) {
+    ForceLayout.prototype.init = function (graph, useWorker) {
+        if (this._layoutWorker) {
+            this._layoutWorker.terminate();
+            this._layoutWorker = null;
+        }
         if (workerUrl && useWorker) {
             try {
                 if (!this._layoutWorker) {
@@ -117,10 +126,6 @@ define(function(require) {
             if (!this._layout) {
                 this._layout = new ForceLayoutWorker();
             }
-            if (this._layoutWorker) {
-                this._layoutWorker.terminate();
-                this._layoutWorker = null;
-            }
         }
 
         this.temperature = 1;
@@ -131,14 +136,16 @@ define(function(require) {
         var len = graph.nodes.length;
         var positionArr = new ArrayCtor(len * 2);
         var massArr = new ArrayCtor(len);
-        var radiusArr = new ArrayCtor(len);
+        var sizeArr = new ArrayCtor(len);
 
         for (var i = 0; i < len; i++) {
             var n = graph.nodes[i];
             positionArr[i * 2] = n.layout.position[0];
             positionArr[i * 2 + 1] = n.layout.position[1];
-            massArr[i] = n.layout.mass;
-            radiusArr[i] = n.layout.radius;
+            massArr[i] = typeof(n.layout.mass) === 'undefined'
+                ? 1 : n.layout.mass;
+            sizeArr[i] = typeof(n.layout.size) === 'undefined'
+                ? 1 : n.layout.size;
 
             n.layout.__index = i;
         }
@@ -153,38 +160,34 @@ define(function(require) {
             edgeWeightArr[i] = edge.layout.weight || 1;
         }
 
-        this._token = getToken();
-
         if (this._layoutWorker) {
 
             this._layoutWorker.postMessage({
                 cmd: 'init',
                 nodesPosition: positionArr,
                 nodesMass: massArr,
-                nodesSize: radiusArr,
+                nodesSize: sizeArr,
                 edges: edgeArr,
-                edgesWeight: edgeWeightArr,
-                token: this._token
+                edgesWeight: edgeWeightArr
             });
         }
         else {
-            this._layout.setToken(this._token);
-            this._layout.initNodes(positionArr, massArr, radiusArr);
+            this._layout.initNodes(positionArr, massArr, sizeArr);
             this._layout.initEdges(edgeArr, edgeWeightArr);   
         }
 
         this.updateConfig();
-    }
+    };
 
     ForceLayout.prototype.step = function (steps) {
         var nodes = this.graph.nodes;
         if (this._layoutWorker) {
             // Sync back
-            var positionArr = new ArrayCtor(nodes.length * 2 + 1);
+            var positionArr = new ArrayCtor(nodes.length * 2);
             for (var i = 0; i < nodes.length; i++) {
                 var n = nodes[i];
-                positionArr[i * 2 + 1] = n.layout.position[0];
-                positionArr[i * 2 + 2] = n.layout.position[1];
+                positionArr[i * 2] = n.layout.position[0];
+                positionArr[i * 2 + 1] = n.layout.position[1];
             }
             this._layoutWorker.postMessage(positionArr.buffer, [positionArr.buffer]);
 
@@ -212,32 +215,26 @@ define(function(require) {
                 this.temperature *= this.coolDown;
             }
         }
-    }
+    };
 
     ForceLayout.prototype._$onupdate = function (e) {
         if (this._layoutWorker) {
             var positionArr = new Float32Array(e.data);
-            var token = positionArr[0];
-            // If token is from current layout instance
-            if (token === this._token) {
-                for (var i = 0; i < this.graph.nodes.length; i++) {
-                    var n = this.graph.nodes[i];
-                    n.layout.position[0] = positionArr[i * 2 + 1];
-                    n.layout.position[1] = positionArr[i * 2 + 2];
-                }
-                this.onupdate && this.onupdate();
+            for (var i = 0; i < this.graph.nodes.length; i++) {
+                var n = this.graph.nodes[i];
+                n.layout.position[0] = positionArr[i * 2];
+                n.layout.position[1] = positionArr[i * 2 + 1];
             }
+            this.onupdate && this.onupdate();
         }
         else if (this._layout) {
-            if (this._layout.tokenMatch(this._token)) {
-                for (var i = 0; i < this.graph.nodes.length; i++) {
-                    var n = this.graph.nodes[i];
-                    vec2.copy(n.layout.position, this._layout.nodes[i].position);
-                }
-                this.onupdate && this.onupdate();
+            for (var i = 0; i < this.graph.nodes.length; i++) {
+                var n = this.graph.nodes[i];
+                vec2.copy(n.layout.position, this._layout.nodes[i].position);
             }
+            this.onupdate && this.onupdate();
         }
-    }
+    };
 
     ForceLayout.prototype.dispose = function() {
         if (this._layoutWorker) {
@@ -245,8 +242,7 @@ define(function(require) {
         }
         this._layoutWorker = null;
         this._layout = null;
-        this._token = 0;
-    }
+    };
 
     return ForceLayout;
 });

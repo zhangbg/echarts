@@ -2,7 +2,7 @@
  * echarts组件：工具箱
  *
  * @desc echarts基于Canvas，纯Javascript图表库，提供直观，生动，可交互，可个性化定制的数据统计图表。
- * @author Kener (@Kener-林峰, linzhifeng@baidu.com)
+ * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
  *
  */
 define(function (require) {
@@ -15,6 +15,97 @@ define(function (require) {
     var IconShape = require('../util/shape/Icon');
     
     var ecConfig = require('../config');
+    ecConfig.toolbox = {
+        zlevel: 0,                  // 一级层叠
+        z: 6,                       // 二级层叠
+        show: false,
+        orient: 'horizontal',      // 布局方式，默认为水平布局，可选为：
+                                   // 'horizontal' ¦ 'vertical'
+        x: 'right',                // 水平安放位置，默认为全图右对齐，可选为：
+                                   // 'center' ¦ 'left' ¦ 'right'
+                                   // ¦ {number}（x坐标，单位px）
+        y: 'top',                  // 垂直安放位置，默认为全图顶端，可选为：
+                                   // 'top' ¦ 'bottom' ¦ 'center'
+                                   // ¦ {number}（y坐标，单位px）
+        color: ['#1e90ff','#22bb22','#4b0082','#d2691e'],
+        disableColor: '#ddd',
+        effectiveColor: 'red',
+        backgroundColor: 'rgba(0,0,0,0)', // 工具箱背景颜色
+        borderColor: '#ccc',       // 工具箱边框颜色
+        borderWidth: 0,            // 工具箱边框线宽，单位px，默认为0（无边框）
+        padding: 5,                // 工具箱内边距，单位px，默认各方向内边距为5，
+                                   // 接受数组分别设定上右下左边距，同css
+        itemGap: 10,               // 各个item之间的间隔，单位px，默认为10，
+                                   // 横向布局时为水平间隔，纵向布局时为纵向间隔
+        itemSize: 16,              // 工具箱图形宽度
+        showTitle: true,
+        // textStyle: {},
+        feature: {
+            mark: {
+                show: false,
+                title: {
+                    mark: '辅助线开关',
+                    markUndo: '删除辅助线',
+                    markClear: '清空辅助线'
+                },
+                lineStyle: {
+                    width: 1,
+                    color: '#1e90ff',
+                    type: 'dashed'
+                }
+            },
+            dataZoom: {
+                show: false,
+                title: {
+                    dataZoom: '区域缩放',
+                    dataZoomReset: '区域缩放后退'
+                }
+            },
+            dataView: {
+                show: false,
+                title: '数据视图',
+                readOnly: false,
+                lang: ['数据视图', '关闭', '刷新']
+            },
+            magicType: {
+                show: false,
+                title: {
+                    line: '折线图切换',
+                    bar: '柱形图切换',
+                    stack: '堆积',
+                    tiled: '平铺',
+                    force: '力导向布局图切换',
+                    chord: '和弦图切换',
+                    pie: '饼图切换',
+                    funnel: '漏斗图切换'
+                },
+                /*
+                option: {
+                    line: {},
+                    bar: {},
+                    stack: {},
+                    tiled: {},
+                    force: {},
+                    chord: {},
+                    pie: {},
+                    funnel: {}
+                },
+                */
+                type: [] // 'line', 'bar', 'stack', 'tiled', 'force', 'chord', 'pie', 'funnel'
+            },
+            restore: {
+                show: false,
+                title: '还原'
+            },
+            saveAsImage: {
+                show: false,
+                title: '保存为图片',
+                type: 'png',
+                lang: ['点击保存'] 
+            }
+        }
+    };
+
     var zrUtil = require('zrender/tool/util');
     var zrConfig = require('zrender/config');
     var zrEvent = require('zrender/tool/event');
@@ -44,6 +135,7 @@ define(function (require) {
         this._featureTitle = {};             // 文字
         this._featureIcon = {};              // 图标
         this._featureColor = {};             // 颜色
+        this._featureOption = {};
         this._enableColor = 'red';
         this._disableColor = '#ccc';
         // this._markStart;
@@ -124,6 +216,10 @@ define(function (require) {
                             for (var i = 0, l = feature[key].type.length; i < l; i++) {
                                 feature[key].title[feature[key].type[i] + 'Chart']
                                     = feature[key].title[feature[key].type[i]];
+                                if (feature[key].option) {
+                                    feature[key].option[feature[key].type[i] + 'Chart']
+                                        = feature[key].option[feature[key].type[i]];
+                                }
                                 iconName.push({ key: key, name: feature[key].type[i] + 'Chart' });
                             }
                             break;
@@ -155,6 +251,10 @@ define(function (require) {
                     }
                     if (feature[key].color) {
                         this._featureColor[name] = feature[key].color[name] || feature[key].color;
+                    }
+                    if (feature[key].option) {
+                        this._featureOption[name] = feature[key].option[name] 
+                                                    || feature[key].option;
                     }
                 }
                 this._itemGroupLocation = this._getItemGroupLocation();
@@ -205,11 +305,6 @@ define(function (require) {
             else {
                 textPosition = this._itemGroupLocation.x / this.zr.getWidth() < 0.5
                                ? 'right' : 'left';
-                /*
-                textAlign = this._itemGroupLocation.x / this.zr.getWidth() < 0.5
-                               ? 'right' : 'left';
-                textBaseline = 'top';
-                */
             }
             
            this._iconShapeMap = {};
@@ -219,7 +314,8 @@ define(function (require) {
                 // 图形
                 itemShape = {
                     type: 'icon',
-                    zlevel: this._zlevelBase,
+                    zlevel: this.getZlevelBase(),
+                    z: this.getZBase(),
                     style: {
                         x: lastX,
                         y: lastY,
@@ -271,8 +367,8 @@ define(function (require) {
                         itemShape.highlightStyle.textBaseline = textBaseline;
                         itemShape.highlightStyle.textX = lastX + itemSize;
                         itemShape.highlightStyle.textY = textBaseline === 'top' 
-                                                     ? lastY + itemSize + 10
-                                                     : lastY - 10;
+                                                         ? lastY + itemSize + 10
+                                                         : lastY - 10;
                     }
                 }
                 
@@ -310,11 +406,6 @@ define(function (require) {
                     default:
                         if (this._iconList[i].match('Chart')) {
                             itemShape._name = this._iconList[i].replace('Chart', '');
-                            /*
-                            if (this._magicType[itemShape._name]) {
-                                itemShape.style.strokeColor = this._enableColor;
-                            }
-                            */
                             itemShape.onclick = self._onMagicType;
                         }
                         else {
@@ -343,19 +434,17 @@ define(function (require) {
 
         _buildBackground: function () {
             var toolboxOption = this.option.toolbox;
-            var pTop = toolboxOption.padding[0];
-            var pRight = toolboxOption.padding[1];
-            var pBottom = toolboxOption.padding[2];
-            var pLeft = toolboxOption.padding[3];
+            var padding = this.reformCssArray(this.option.toolbox.padding);
 
             this.shapeList.push(new RectangleShape({
-                zlevel: this._zlevelBase,
+                zlevel: this.getZlevelBase(),
+                z: this.getZBase(),
                 hoverable :false,
                 style: {
-                    x: this._itemGroupLocation.x - pLeft,
-                    y: this._itemGroupLocation.y - pTop,
-                    width: this._itemGroupLocation.width + pLeft + pRight,
-                    height: this._itemGroupLocation.height + pTop + pBottom,
+                    x: this._itemGroupLocation.x - padding[3],
+                    y: this._itemGroupLocation.y - padding[0],
+                    width: this._itemGroupLocation.width + padding[3] + padding[1],
+                    height: this._itemGroupLocation.height + padding[0] + padding[2],
                     brushType: toolboxOption.borderWidth === 0 ? 'fill' : 'both',
                     color: toolboxOption.backgroundColor,
                     strokeColor: toolboxOption.borderColor,
@@ -369,6 +458,7 @@ define(function (require) {
          */
         _getItemGroupLocation: function () {
             var toolboxOption = this.option.toolbox;
+            var padding = this.reformCssArray(this.option.toolbox.padding);
             var iconLength = this._iconList.length;
             var itemGap = toolboxOption.itemGap;
             var itemSize = toolboxOption.itemSize;
@@ -393,12 +483,12 @@ define(function (require) {
                     x = Math.floor((zrWidth - totalWidth) / 2);
                     break;
                 case 'left' :
-                    x = toolboxOption.padding[3] + toolboxOption.borderWidth;
+                    x = padding[3] + toolboxOption.borderWidth;
                     break;
                 case 'right' :
                     x = zrWidth
                         - totalWidth
-                        - toolboxOption.padding[1]
+                        - padding[1]
                         - toolboxOption.borderWidth;
                     break;
                 default :
@@ -411,12 +501,12 @@ define(function (require) {
             var zrHeight = this.zr.getHeight();
             switch (toolboxOption.y) {
                 case 'top' :
-                    y = toolboxOption.padding[0] + toolboxOption.borderWidth;
+                    y = padding[0] + toolboxOption.borderWidth;
                     break;
                 case 'bottom' :
                     y = zrHeight
                         - totalHeight
-                        - toolboxOption.padding[2]
+                        - padding[2]
                         - toolboxOption.borderWidth;
                     break;
                 case 'center' :
@@ -449,6 +539,7 @@ define(function (require) {
                     zrEvent.getY(param.event) - this._zoomShape.style.y;
                 this.zr.addHoverShape(this._zoomShape);
                 this.dom.style.cursor = 'crosshair';
+                zrEvent.stop(param.event);
             }
             if (this._zoomStart
                 && (this.dom.style.cursor != 'pointer' && this.dom.style.cursor != 'move')
@@ -466,7 +557,8 @@ define(function (require) {
             var y = zrEvent.getY(param.event);
             var zoomOption = this.option.dataZoom || {};
             this._zoomShape = new RectangleShape({
-                zlevel: this._zlevelBase,
+                zlevel: this.getZlevelBase(),
+                z: this.getZBase(),
                 style: {
                     x: x,
                     y: y,
@@ -507,7 +599,7 @@ define(function (require) {
                         end2: zoom.end2
                     });
                     this._iconEnable(this._iconShapeMap['dataZoomReset']);
-                    this.zr.refresh();
+                    this.zr.refreshNextFrame();
                 }
             }
             return true; // 阻塞全局事件
@@ -523,14 +615,15 @@ define(function (require) {
                 this._iconEnable(this._iconShapeMap['markUndo']);
                 this._iconEnable(this._iconShapeMap['markClear']);
                 this.zr.addShape(this._markShape);
-                this.zr.refresh();
+                this.zr.refreshNextFrame();
             } 
             else if (this._markStart) {
                 this._marking = true;
                 var x = zrEvent.getX(param.event);
                 var y = zrEvent.getY(param.event);
                 this._markShape = new LineShape({
-                    zlevel: this._zlevelBase,
+                    zlevel: this.getZlevelBase(),
+                    z: this.getZBase(),
                     style: {
                         xStart: x,
                         yStart: y,
@@ -559,14 +652,14 @@ define(function (require) {
             if (this._marking || this._markStart) {
                 // 取消
                 this._resetMark();
-                this.zr.refresh();
+                this.zr.refreshNextFrame();
             }
             else {
                 // 启用Mark
                 this._resetZoom();   // mark与dataZoom互斥
                 
                 this.zr.modShape(target.id, {style: {strokeColor: this._enableColor}});
-                this.zr.refresh();
+                this.zr.refreshNextFrame();
                 this._markStart = true;
                 var self = this;
                 setTimeout(function (){
@@ -586,7 +679,7 @@ define(function (require) {
                 if (len >= 1) {
                     var target = this._markShapeList[len - 1];
                     this.zr.delShape(target.id);
-                    this.zr.refresh();
+                    this.zr.refreshNextFrame();
                     this._markShapeList.pop();
                     if (len === 1) {
                         this._iconDisable(this._iconShapeMap['markUndo']);
@@ -608,7 +701,7 @@ define(function (require) {
                 }
                 this._iconDisable(this._iconShapeMap['markUndo']);
                 this._iconDisable(this._iconShapeMap['markClear']);
-                this.zr.refresh();
+                this.zr.refreshNextFrame();
             }
             return true;
         },
@@ -618,7 +711,7 @@ define(function (require) {
             if (this._zooming || this._zoomStart) {
                 // 取消
                 this._resetZoom();
-                this.zr.refresh();
+                this.zr.refreshNextFrame();
                 this.dom.style.cursor = 'default';
             }
             else {
@@ -626,7 +719,7 @@ define(function (require) {
                 this._resetMark();   // mark与dataZoom互斥
                 
                 this.zr.modShape(target.id, {style: {strokeColor: this._enableColor}});
-                this.zr.refresh();
+                this.zr.refreshNextFrame();
                 this._zoomStart = true;
                 var self = this;
                 setTimeout(function (){
@@ -655,7 +748,7 @@ define(function (require) {
             else {
                 this.component.dataZoom.rectZoom();
                 this._iconDisable(this._iconShapeMap['dataZoomReset']);
-                this.zr.refresh();
+                this.zr.refreshNextFrame();
             }
             
             return true;
@@ -809,8 +902,7 @@ define(function (require) {
             );
             downloadLink.innerHTML = '<img style="vertical-align:middle" src="' + image 
                 + '" title="'
-                + (!!(window.attachEvent 
-                     && navigator.userAgent.indexOf('Opera') === -1)
+                + ((!!window.ActiveXObject || 'ActiveXObject' in window)
                   ? '右键->图片另存为'
                   : (saveOption.lang ? saveOption.lang[0] : '点击保存'))
                 + '"/>';
@@ -859,6 +951,20 @@ define(function (require) {
                 else if (itemName === ecConfig.CHART_TYPE_BAR) {
                     this._magicType[ecConfig.CHART_TYPE_LINE] = false;
                 }
+                // 饼图漏斗互斥
+                if (itemName === ecConfig.CHART_TYPE_PIE) {
+                    this._magicType[ecConfig.CHART_TYPE_FUNNEL] = false;
+                }
+                else if (itemName === ecConfig.CHART_TYPE_FUNNEL) {
+                    this._magicType[ecConfig.CHART_TYPE_PIE] = false;
+                }
+                // 力导和弦互斥
+                if (itemName === ecConfig.CHART_TYPE_FORCE) {
+                    this._magicType[ecConfig.CHART_TYPE_CHORD] = false;
+                }
+                else if (itemName === ecConfig.CHART_TYPE_CHORD) {
+                    this._magicType[ecConfig.CHART_TYPE_FORCE] = false;
+                }
                 // 堆积平铺互斥
                 if (itemName === _MAGICTYPE_STACK) {
                     this._magicType[_MAGICTYPE_TILED] = false;
@@ -894,7 +1000,7 @@ define(function (require) {
             var target = param.target.style.iconType;
             var featureHandler = this.option.toolbox.feature[target].onclick;
             if (typeof featureHandler === 'function') {
-                featureHandler(this.option);
+                featureHandler.call(this, this.option);
             }
         },
 
@@ -985,21 +1091,17 @@ define(function (require) {
         
         getMagicOption: function (){
             var axis;
+            var chartType;
             if (this._magicType[ecConfig.CHART_TYPE_LINE] 
                 || this._magicType[ecConfig.CHART_TYPE_BAR]
             ) {
-                // 图表类型有切换
+                // 图表类型有折柱切换
                 var boundaryGap = this._magicType[ecConfig.CHART_TYPE_LINE] ? false : true;
                 for (var i = 0, l = this.option.series.length; i < l; i++) {
-                    if (this._magicMap[this.option.series[i].type]) {
-                        this.option.series[i].type = this._magicType[ecConfig.CHART_TYPE_LINE]
-                                                     ? ecConfig.CHART_TYPE_LINE
-                                                     : ecConfig.CHART_TYPE_BAR;
-                        // 避免不同类型图表类型的样式污染
-                        this.option.series[i].itemStyle = zrUtil.clone(
-                            this.option.series[i].__itemStyle
-                        );
-                        
+                    chartType = this.option.series[i].type;
+                    if (chartType == ecConfig.CHART_TYPE_LINE
+                        || chartType == ecConfig.CHART_TYPE_BAR
+                    ) {
                         axis = this.option.xAxis instanceof Array
                                ? this.option.xAxis[this.option.series[i].xAxisIndex || 0]
                                : this.option.xAxis;
@@ -1014,23 +1116,58 @@ define(function (require) {
                         }
                     }
                 }
+                
+                this._defaultMagic(ecConfig.CHART_TYPE_LINE, ecConfig.CHART_TYPE_BAR);
             }
-           
+            this._defaultMagic(ecConfig.CHART_TYPE_CHORD, ecConfig.CHART_TYPE_FORCE);
+            this._defaultMagic(ecConfig.CHART_TYPE_PIE, ecConfig.CHART_TYPE_FUNNEL);
+            
             if (this._magicType[_MAGICTYPE_STACK] || this._magicType[_MAGICTYPE_TILED]) {
                 // 有堆积平铺切换
                 for (var i = 0, l = this.option.series.length; i < l; i++) {
                     if (this._magicType[_MAGICTYPE_STACK]) {
                         // 启用堆积
                         this.option.series[i].stack = '_ECHARTS_STACK_KENER_2014_';
+                        chartType = _MAGICTYPE_STACK;
                     }
                     else if (this._magicType[_MAGICTYPE_TILED]) {
                         // 启用平铺
                         this.option.series[i].stack = null;
+                        chartType = _MAGICTYPE_TILED;
+                    }
+                    if (this._featureOption[chartType + 'Chart']) {
+                        zrUtil.merge(
+                            this.option.series[i],
+                            this._featureOption[chartType + 'Chart'] || {},
+                            true
+                        );
                     }
                 }
             }
-            
             return this.option;
+        },
+        
+        _defaultMagic : function(cType1, cType2) {
+            if (this._magicType[cType1] || this._magicType[cType2]) {
+                for (var i = 0, l = this.option.series.length; i < l; i++) {
+                    var chartType = this.option.series[i].type;
+                    if (chartType == cType1 || chartType == cType2) {
+                        this.option.series[i].type = this._magicType[cType1] ? cType1 : cType2;
+                        // 避免不同类型图表类型的样式污染
+                        this.option.series[i].itemStyle = zrUtil.clone(
+                            this.option.series[i].__itemStyle
+                        );
+                        chartType = this.option.series[i].type;
+                        if (this._featureOption[chartType + 'Chart']) {
+                            zrUtil.merge(
+                                this.option.series[i],
+                                this._featureOption[chartType + 'Chart'] || {},
+                                true
+                            );
+                        }
+                    }
+                }
+            }
         },
 
         silence: function (s) {
@@ -1069,13 +1206,11 @@ define(function (require) {
         /**
          * 释放后实例不可用
          */
-        dispose: function () {
+        onbeforDispose: function () {
             if (this._dataView) {
                 this._dataView.dispose();
                 this._dataView = null;
             }
-            this.clear();
-            this.shapeList = null;
             this._markShapeList = null;
         },
         
@@ -1088,10 +1223,6 @@ define(function (require) {
                 this._resetZoom();
                 
                 newOption.toolbox = this.reformOption(newOption.toolbox);
-                // 补全padding属性
-                newOption.toolbox.padding = this.reformCssArray(
-                    newOption.toolbox.padding
-                );
                 this.option = newOption;
                 
                 this.clear(true);

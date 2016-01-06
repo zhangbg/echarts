@@ -45,6 +45,9 @@ define(function __echartsForceLayoutWorker(require) {
                 out[1] = a[1] - b[1];
                 return out;
             },
+            dot: function (v1, v2) {
+                return v1[0] * v2[0] + v1[1] * v2[1];
+            },
             normalize: function(out, a) {
                 var x = a[0];
                 var y = a[1];
@@ -257,7 +260,9 @@ define(function __echartsForceLayoutWorker(require) {
 
         this.repulsionByDegree = false;
 
-        this.preventOverlap = false;
+        this.preventNodeOverlap = false;
+        this.preventNodeEdgeOverlap = false;
+
         this.strongGravity = true;
 
         this.gravity = 1.0;
@@ -269,7 +274,7 @@ define(function __echartsForceLayoutWorker(require) {
         this.width = 500;
         this.height = 500;
 
-        this.maxSpeedIncrease = 1.0;
+        this.maxSpeedIncrease = 1;
 
         this.nodes = [];
         this.edges = [];
@@ -283,6 +288,18 @@ define(function __echartsForceLayoutWorker(require) {
 
         this._k = 0;
     }
+
+    ForceLayout.prototype.nodeToNodeRepulsionFactor = function (mass, d, k) {
+        return k * k * mass / d;
+    };
+
+    ForceLayout.prototype.edgeToNodeRepulsionFactor = function (mass, d, k) {
+        return k * mass / d;
+    };
+
+    ForceLayout.prototype.attractionFactor = function (w, d, k) {
+        return w * d / k;
+    };
 
     ForceLayout.prototype.initNodes = function(positionArr, massArr, sizeArr) {
 
@@ -364,9 +381,18 @@ define(function __echartsForceLayoutWorker(require) {
                 mass += node.mass;
                 vec2.scaleAndAdd(centerOfMass, centerOfMass, node.position, node.mass);
             }
-            vec2.scale(centerOfMass, centerOfMass, 1 / mass);
+            if (mass > 0) {
+                vec2.scale(centerOfMass, centerOfMass, 1 / mass);
+            }
         }
 
+        this.updateForce();
+
+        this.updatePosition();
+    };
+
+    ForceLayout.prototype.updateForce = function () {
+        var nNodes = this.nodes.length;
         // Reset forces
         for (var i = 0; i < nNodes; i++) {
             var node = this.nodes[i];
@@ -375,31 +401,21 @@ define(function __echartsForceLayoutWorker(require) {
             vec2.set(node.force, 0, 0);
         }
 
-        // Compute forces
-        // Repulsion
-        for (var i = 0; i < nNodes; i++) {
-            var na = this.nodes[i];
-            if (this.barnesHutOptimize) {
-                this.applyRegionToNodeRepulsion(this._rootRegion, na);
-            }
-            else {
-                for (var j = i + 1; j < nNodes; j++) {
-                    var nb = this.nodes[j];
-                    this.applyNodeToNodeRepulsion(na, nb, false);
-                }
-            }
+        this.updateNodeNodeForce();
 
-            // Gravity
-            if (this.gravity > 0) {
-                this.applyNodeGravity(na);
-            }
+        if (this.gravity > 0) {
+            this.updateGravityForce();
         }
 
-        // Attraction
-        for (var i = 0; i < this.edges.length; i++) {
-            this.applyEdgeAttraction(this.edges[i]);
-        }
+        this.updateEdgeForce();
 
+        if (this.preventNodeEdgeOverlap) {
+            this.updateNodeEdgeForce();
+        }
+    };
+
+    ForceLayout.prototype.updatePosition = function () {
+        var nNodes = this.nodes.length;
         // Apply forces
         // var speed = vec2.create();
         var v = vec2.create();
@@ -418,12 +434,12 @@ define(function __echartsForceLayoutWorker(require) {
             vec2.scale(node.force, node.force, scale);
 
             vec2.add(speed, speed, node.force);
-
             vec2.scale(speed, speed, this.temperature);
 
             // Prevent swinging
             // Limited the increase of speed up to 100% each step
             // TODO adjust by nodes number
+            // TODO First iterate speed control
             vec2.sub(v, speed, node.speedPrev);
             var swing = vec2.len(v);
             if (swing > 0) {
@@ -444,6 +460,45 @@ define(function __echartsForceLayoutWorker(require) {
         }
     };
 
+    ForceLayout.prototype.updateNodeNodeForce = function () {
+        var nNodes = this.nodes.length;
+        // Compute forces
+        // Repulsion
+        for (var i = 0; i < nNodes; i++) {
+            var na = this.nodes[i];
+            if (this.barnesHutOptimize) {
+                this.applyRegionToNodeRepulsion(this._rootRegion, na);
+            }
+            else {
+                for (var j = i + 1; j < nNodes; j++) {
+                    var nb = this.nodes[j];
+                    this.applyNodeToNodeRepulsion(na, nb, false);
+                }
+            }
+        }
+    };
+
+    ForceLayout.prototype.updateGravityForce = function () {
+        for (var i = 0; i < this.nodes.length; i++) {
+            this.applyNodeGravity(this.nodes[i]);
+        }
+    };
+
+    ForceLayout.prototype.updateEdgeForce = function () {
+        // Attraction
+        for (var i = 0; i < this.edges.length; i++) {
+            this.applyEdgeAttraction(this.edges[i]);
+        }
+    };
+
+    ForceLayout.prototype.updateNodeEdgeForce = function () {
+        for (var i = 0; i < this.nodes.length; i++) {
+            for (var j = 0; j < this.edges.length; j++) {
+                this.applyEdgeToNodeRepulsion(this.edges[j], this.nodes[i]);
+            }
+        }
+    };
+
     ForceLayout.prototype.applyRegionToNodeRepulsion = (function() {
         var v = vec2.create();
         return function applyRegionToNodeRepulsion(region, node) {
@@ -451,6 +506,10 @@ define(function __echartsForceLayoutWorker(require) {
                 this.applyNodeToNodeRepulsion(region.node, node, true);
             }
             else {
+                // Static region and node
+                if (region.mass === 0 && node.mass === 0) {
+                    return;
+                }
                 vec2.sub(v, node.position, region.centerOfMass);
                 var d2 = v[0] * v[0] + v[1] * v[1];
                 if (d2 > this.barnesHutTheta * region.size * region.size) {
@@ -469,9 +528,14 @@ define(function __echartsForceLayoutWorker(require) {
     ForceLayout.prototype.applyNodeToNodeRepulsion = (function() {
         var v = vec2.create();
         return function applyNodeToNodeRepulsion(na, nb, oneWay) {
-            if (na == nb) {
+            if (na === nb) {
                 return;
             }
+            // Two static node
+            if (na.mass === 0 && nb.mass === 0) {
+                return;
+            }
+            
             vec2.sub(v, na.position, nb.position);
             var d2 = v[0] * v[0] + v[1] * v[1];
 
@@ -481,23 +545,28 @@ define(function __echartsForceLayoutWorker(require) {
             }
 
             var factor;
-            var k2 = this._k * this._k;
             var mass = na.mass + nb.mass;
+            var d = Math.sqrt(d2);
 
-            if (this.preventOverlap) {
-                var d = Math.sqrt(d2);
+            // Normalize v
+            vec2.scale(v, v, 1 / d);
+
+            if (this.preventNodeOverlap) {
                 d = d - na.size - nb.size;
                 if (d > 0) {
-                    factor = k2 * mass / (d * d);
+                    factor = this.nodeToNodeRepulsionFactor(
+                        mass, d, this._k
+                    );
                 }
                 else if (d <= 0) {
                     // A stronger repulsion if overlap
-                    factor = k2 * 10 * mass;
+                    factor = this._k * this._k * 10 * mass;
                 }
             }
             else {
-                // Divide factor by an extra `d` to normalize the `v`
-                factor = k2 * mass / d2;
+                factor = this.nodeToNodeRepulsionFactor(
+                    mass, d, this._k
+                );
             }
 
             if (!oneWay) {
@@ -537,10 +606,10 @@ define(function __echartsForceLayoutWorker(require) {
                 }
             }
 
-            var factor = -w * d / this._k;
+            var factor = this.attractionFactor(w, d, this._k);
 
-            vec2.scaleAndAdd(na.force, na.force, v, factor);
-            vec2.scaleAndAdd(nb.force, nb.force, v, -factor);
+            vec2.scaleAndAdd(na.force, na.force, v, -factor);
+            vec2.scaleAndAdd(nb.force, nb.force, v, factor);
         };
     })();
 
@@ -570,6 +639,49 @@ define(function __echartsForceLayoutWorker(require) {
         };
     })();
 
+    ForceLayout.prototype.applyEdgeToNodeRepulsion = (function () {
+        var v12 = vec2.create();
+        var v13 = vec2.create();
+        var p = vec2.create();
+        return function (e, n3) {
+            var n1 = e.node1;
+            var n2 = e.node2;
+
+            if (n1 === n3 || n2 === n3) {
+                return;
+            }
+
+            vec2.sub(v12, n2.position, n1.position);
+            vec2.sub(v13, n3.position, n1.position);
+
+            var len12 = vec2.len(v12);
+            vec2.scale(v12, v12, 1 / len12);
+            var len = vec2.dot(v12, v13);
+
+            // n3 can't project on line n1-n2
+            if (len < 0 || len > len12) {
+                return;
+            }
+
+            // Project point
+            vec2.scaleAndAdd(p, n1.position, v12, len);
+
+            // n3 distance to line n1-n2
+            var dist = vec2.dist(p, n3.position) - n3.size;
+            var factor = this.edgeToNodeRepulsionFactor(
+                n3.mass, Math.max(dist, 0.1), 100
+            );
+            // Use v12 as normal vector
+            vec2.sub(v12, n3.position, p);
+            vec2.normalize(v12, v12);
+            vec2.scaleAndAdd(n3.force, n3.force, v12, factor);
+
+            // PENDING
+            vec2.scaleAndAdd(n1.force, n1.force, v12, -factor);
+            vec2.scaleAndAdd(n2.force, n2.force, v12, -factor);
+        };
+    })();
+
     ForceLayout.prototype.updateBBox = function() {
         var minX = Infinity;
         var minY = Infinity;
@@ -593,14 +705,6 @@ define(function __echartsForceLayoutWorker(require) {
         return str.slice(str.indexOf('{') + 1, str.lastIndexOf('return'));
     };
 
-    ForceLayout.prototype.setToken = function(token) {
-        this._token = token;
-    }
-
-    ForceLayout.prototype.tokenMatch = function(token) {
-        return token === this._token;
-    }
-
     /****************************
      * Main process
      ***************************/
@@ -612,15 +716,14 @@ define(function __echartsForceLayoutWorker(require) {
         self.onmessage = function(e) {
             // Position read back
             if (e.data instanceof ArrayBuffer) {
-                if (!forceLayout) {
-                    return;
-                }
+                if (!forceLayout) return;
+
                 var positionArr = new Float32Array(e.data);
-                var nNodes = (positionArr.length - 1) / 2;
+                var nNodes = positionArr.length / 2;
                 for (var i = 0; i < nNodes; i++) {
                     var node = forceLayout.nodes[i];
-                    node.position[0] = positionArr[i * 2 + 1];
-                    node.position[1] = positionArr[i * 2 + 2];
+                    node.position[0] = positionArr[i * 2];
+                    node.position[1] = positionArr[i * 2 + 1];
                 }
                 return;
             }
@@ -632,7 +735,6 @@ define(function __echartsForceLayoutWorker(require) {
                     }
                     forceLayout.initNodes(e.data.nodesPosition, e.data.nodesMass, e.data.nodesSize);
                     forceLayout.initEdges(e.data.edges, e.data.edgesWeight);
-                    forceLayout._token = e.data.token;
                     break;
                 case 'updateConfig':
                     if (forceLayout) {
@@ -646,7 +748,7 @@ define(function __echartsForceLayoutWorker(require) {
 
                     if (forceLayout) {
                         var nNodes = forceLayout.nodes.length;
-                        var positionArr = new Float32Array(nNodes * 2 + 1);
+                        var positionArr = new Float32Array(nNodes * 2);
 
                         forceLayout.temperature = e.data.temperature;
 
@@ -657,11 +759,9 @@ define(function __echartsForceLayoutWorker(require) {
                         // Callback
                         for (var i = 0; i < nNodes; i++) {
                             var node = forceLayout.nodes[i];
-                            positionArr[i * 2 + 1] = node.position[0];
-                            positionArr[i * 2 + 2] = node.position[1];
+                            positionArr[i * 2] = node.position[0];
+                            positionArr[i * 2 + 1] = node.position[1];
                         }
-
-                        positionArr[0] = forceLayout._token;
 
                         self.postMessage(positionArr.buffer, [positionArr.buffer]);
                     }

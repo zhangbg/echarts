@@ -8,7 +8,6 @@
 define(function (require) {
     'use strict';
     
-    var ComponentBase = require('../component/base');
     var ChartBase = require('./base');
 
     var Graph = require('../data/Graph');
@@ -16,20 +15,125 @@ define(function (require) {
     
     // 图形依赖
     var LineShape = require('zrender/shape/Line');
+    var BezierCurveShape = require('zrender/shape/BezierCurve');
     var ImageShape = require('zrender/shape/Image');
     var IconShape = require('../util/shape/Icon');
 
     var ecConfig = require('../config');
+    // 力导向布局图默认参数
+    ecConfig.force = {
+        zlevel: 1,                  // 一级层叠
+        z: 2,                       // 二级层叠
+        // 布局中心
+        center: ['50%', '50%'],
+
+        // 布局大小
+        size: '100%',
+
+        // 防止节点和节点，节点和边之间的重叠
+        preventOverlap: false,
+        
+        // 布局冷却因子，值越小结束时间越短，值越大时间越长但是结果也越收敛
+        coolDown: 0.99,
+        
+        // 数据映射到圆的半径的最小值和最大值
+        minRadius: 10,
+        maxRadius: 20,
+
+        // 是否根据屏幕比例拉伸
+        ratioScaling: false,
+
+        // 在 500+ 顶点的图上建议设置 large 为 true, 会使用 Barnes-Hut simulation
+        // 同时开启 useWorker 并且把 steps 值调大
+        // 关于Barnes-Hut simulation: http://en.wikipedia.org/wiki/Barnes–Hut_simulation
+        large: false,
+
+        // 是否在浏览器支持 worker 的时候使用 web worker
+        useWorker: false,
+        // 每一帧 force 迭代的次数，仅在启用webworker的情况下有用
+        steps: 1,
+
+        // 布局缩放因子，并不完全精确, 效果跟布局大小类似
+        scaling: 1.0,
+
+        // 向心力因子，越大向心力越大（ 所有顶点会往 center 的位置收拢 )
+        gravity: 1,
+
+        symbol: 'circle',
+        // symbolSize 为 0 的话使用映射到minRadius-maxRadius后的值
+        symbolSize: 0,
+
+        linkSymbol: null,
+        linkSymbolSize: [10, 15],
+        draggable: true,
+        clickable: true,
+
+        roam: false,
+
+        // 分类里如果有样式会覆盖节点默认样式
+        // categories: [{
+            // itemStyle
+            // symbol
+            // symbolSize
+            // name
+        // }],
+        itemStyle: {
+            normal: {
+                // color: 各异,
+                label: {
+                    show: false,
+                    position: 'inside'
+                    // textStyle: null      // 默认使用全局文本样式，详见TEXTSTYLE
+                },
+                nodeStyle: {
+                    brushType : 'both',
+                    borderColor : '#5182ab',
+                    borderWidth: 1
+                },
+                linkStyle: {
+                    color: '#5182ab',
+                    width: 1,
+                    type: 'line'
+                }
+            },
+            emphasis: {
+                // color: 各异,
+                label: {
+                    show: false
+                    // textStyle: null      // 默认使用全局文本样式，详见TEXTSTYLE
+                },
+                nodeStyle: {},
+                linkStyle: {
+                    opacity: 0
+                }
+            }
+        }
+        // nodes: [{
+        //     name: 'xxx',
+        //     value: 1,
+        //     itemStyle: {},
+        //     initial: [0, 0],
+        //     fixX: false,
+        //     fixY: false,
+        //     ignore: false,
+        //     symbol: 'circle',
+        //     symbolSize: 0
+        // }]
+        // links: [{
+        //      source: 1,
+        //      target: 2,
+        //      weight: 1,
+        //      itemStyle: {}
+        // }, {
+        //      source: 'xxx',
+        //      target: 'ooo'
+        // }]
+    };
+    
     var ecData = require('../util/ecData');
     var zrUtil = require('zrender/tool/util');
     var zrConfig = require('zrender/config');
     var vec2 = require('zrender/tool/vector');
-
-    var requestAnimationFrame = window.requestAnimationFrame
-                                || window.msRequestAnimationFrame
-                                || window.mozRequestAnimationFrame
-                                || window.webkitRequestAnimationFrame
-                                || function (func){setTimeout(func, 16);};
 
     /**
      * 构造函数
@@ -40,10 +144,8 @@ define(function (require) {
      */
     function Force(ecTheme, messageCenter, zr, option, myChart) {
         var self = this;
-        // 基类
-        ComponentBase.call(this, ecTheme, messageCenter, zr, option, myChart);
         // 图表基类
-        ChartBase.call(this);
+        ChartBase.call(this, ecTheme, messageCenter, zr, option, myChart);
 
         // 保存节点的位置，改变数据时能够有更好的动画效果
         this.__nodePositionMap = {};
@@ -53,7 +155,7 @@ define(function (require) {
 
         this._layout.onupdate = function() {
             self._step();
-        }
+        };
 
         this._steps = 1;
 
@@ -71,7 +173,8 @@ define(function (require) {
         this.onmousemove = function() {
             onmousemove.apply(self, arguments);
         };
-        this._init();
+
+        this.refresh(option);
     }
 
     /**
@@ -84,7 +187,7 @@ define(function (require) {
         type : ecConfig.CHART_TYPE_FORCE,
 
         _init: function() {
-            var self = this;
+            this.selectedMap = {};
             var legend = this.component.legend;
             var series = this.series;
             var serieName;
@@ -106,57 +209,167 @@ define(function (require) {
 
                     this.buildMark(i);
                     
-                    // 同步selected状态
-                    var categories = serie.categories;
-                    for (var j = 0, len = categories.length; j < len; j++) {
-                        if (categories[j].name) {
-                            if (legend){
-                                this.selectedMap[j] = 
-                                    legend.isSelected(categories[j].name);
-                            } else {
-                                this.selectedMap[j] = true;
-                            }
-                        }
-                    }
-
                     // TODO 多个 force 
-                    this._forceSerie = serie;
-
-                    this._initSerie(serie);
+                    this._initSerie(serie, i);
                     break;
                 }
             }
+
+            this.animationEffect();
         },
 
-        _initSerie: function(serie) {
+        _getNodeCategory: function (serie, node) {
+            return serie.categories && serie.categories[node.category || 0];
+        },
+
+        _getNodeQueryTarget: function (serie, node, type) {
+            type = type || 'normal';
+            var category = this._getNodeCategory(serie, node) || {};
+            return [
+                // Node
+                node.itemStyle && node.itemStyle[type],
+                // Category
+                category && category.itemStyle && category.itemStyle[type],
+                // Serie
+                serie.itemStyle[type].nodeStyle
+            ];
+        },
+
+        _getEdgeQueryTarget: function (serie, edge, type) {
+            type = type || 'normal';
+            return [
+                (edge.itemStyle && edge.itemStyle[type]),
+                serie.itemStyle[type].linkStyle
+            ];
+        },
+
+        _initSerie: function(serie, serieIdx) {
             this._temperature = 1;
 
-            var graph = this._graph;
-            graph.clear();
+            // matrix 表示边
+            if (serie.matrix) {
+                this._graph = this._getSerieGraphFromDataMatrix(serie);
+            }
+            // links 表示边
+            else if (serie.links) {
+                this._graph = this._getSerieGraphFromNodeLinks(serie);
+            }
 
-            for (var i = 0, len = serie.nodes.length; i < len; i++) {
-                var n = serie.nodes[i];
-                if (
-                    !n || n.ignore
-                    || (n.category && !this.selectedMap[n.category])
-                ) {
+            this._buildLinkShapes(serie, serieIdx);
+            this._buildNodeShapes(serie, serieIdx);
+
+            var panable = serie.roam === true || serie.roam === 'move';
+            var zoomable = serie.roam === true || serie.roam === 'scale';
+            // Enable pan and zooom
+            this.zr.modLayer(this.getZlevelBase(), {
+                panable: panable,
+                zoomable: zoomable
+            });
+
+            if (
+                this.query('markPoint.effect.show')
+                || this.query('markLine.effect.show')
+            ) {
+                this.zr.modLayer(ecConfig.EFFECT_ZLEVEL, {
+                    panable: panable,
+                    zoomable: zoomable
+                });
+            }
+
+            this._initLayout(serie);
+
+            this._step();
+        },
+
+        _getSerieGraphFromDataMatrix: function (serie) {
+            var nodesData = [];
+            var count = 0;
+            var matrix = [];
+            // 复制一份新的matrix
+            for (var i = 0; i < serie.matrix.length; i++) {
+                matrix[i] = serie.matrix[i].slice();
+            }
+            var data = serie.data || serie.nodes;
+            for (var i = 0; i < data.length; i++) {
+                var node = {};
+                var group = data[i];
+                for (var key in group) {
+                    // name改为id
+                    if (key === 'name') {
+                        node['id'] = group['name'];
+                    }
+                    else {
+                        node[key] = group[key];
+                    }
+                }
+                // legends 选择优先级 category -> group
+                var category = this._getNodeCategory(serie, group);
+                var name = category ? category.name : group.name;
+
+                this.selectedMap[name] = this.isSelected(name);
+                if (this.selectedMap[name]) {
+                    nodesData.push(node);
+                    count++;
+                }
+                else {
+                    // 过滤legend未选中的数据
+                    matrix.splice(count, 1);
+                    for (var j = 0; j < matrix.length; j++) {
+                        matrix[j].splice(count, 1);
+                    }
+                }
+            }
+
+            var graph = Graph.fromMatrix(nodesData, matrix, true);
+
+            // Prepare layout parameters
+            graph.eachNode(function (n, idx) {
+                n.layout = {
+                    size: n.data.value,
+                    mass: 0
+                };
+                n.rawIndex = idx;
+            });
+            graph.eachEdge(function (e) {
+                e.layout = {
+                    weight: e.data.weight
+                };
+            });
+
+            return graph;
+        },
+
+        _getSerieGraphFromNodeLinks: function (serie) {
+            var graph = new Graph(true);
+            var nodes = serie.data || serie.nodes;
+            for (var i = 0, len = nodes.length; i < len; i++) {
+                var n = nodes[i];
+                if (!n || n.ignore) {
                     continue;
                 }
-                var node = graph.addNode(n.name, n);
-                node.rawIndex = i;
+                // legends 选择优先级 category -> group
+                var category = this._getNodeCategory(serie, n);
+                var name = category ? category.name : n.name;
+
+                this.selectedMap[name] = this.isSelected(name);
+                if (this.selectedMap[name]) {
+                    var node = graph.addNode(n.name, n);
+                    node.rawIndex = i;
+                }
             }
+
             for (var i = 0, len = serie.links.length; i < len; i++) {
                 var e = serie.links[i];
                 var n1 = e.source;
                 var n2 = e.target;
                 if (typeof(n1) === 'number') {
-                    n1 = serie.nodes[n1];
+                    n1 = nodes[n1];
                     if (n1) {
                         n1 = n1.name;
                     }
                 }
                 if (typeof(n2) === 'number') {
-                    n2 = serie.nodes[n2];
+                    n2 = nodes[n2];
                     if (n2) {
                         n2 = n2.name;
                     }
@@ -167,12 +380,28 @@ define(function (require) {
                 }
             }
 
-            this._buildLinkShapes(serie);
-            this._buildNodeShapes(serie);
+            graph.eachNode(function (n) {
+                var value = n.data.value;
+                if (value == null) {    // value 是 null 或者 undefined
+                    value = 0;
+                    // 默认使用所有边值的和作为节点的大小, 不修改 data 里的数值
+                    for (var i = 0; i < n.edges.length; i++) {
+                        value += n.edges[i].data.weight || 0;
+                    }
+                }
+                n.layout = {
+                    size: value,
+                    mass: 0
+                };
+            });
+            graph.eachEdge(function (e) {
+                e.layout = {
+                    // 默认 weight 为1
+                    weight: e.data.weight == null ? 1 : e.data.weight
+                };
+            });
 
-            this._initLayout(serie);
-
-            this._step();
+            return graph;
         },
 
         _initLayout: function(serie) {
@@ -184,53 +413,52 @@ define(function (require) {
 
             this._steps = serie.steps || 1;
 
-            this._layout.center = this.parseCenter(this.zr, serie.center);
-            this._layout.width = this.parsePercent(serie.size, this.zr.getWidth());
-            this._layout.height = this.parsePercent(serie.size, this.zr.getHeight());
+            var layout = this._layout;
+            layout.center = this.parseCenter(this.zr, serie.center);
+            layout.width = this.parsePercent(serie.size, this.zr.getWidth());
+            layout.height = this.parsePercent(serie.size, this.zr.getHeight());
 
-            this._layout.large = serie.large;
-            this._layout.scaling = serie.scaling;
-            this._layout.ratioScaling = serie.ratioScaling;
-            this._layout.gravity = serie.gravity;
-            this._layout.temperature = 1;
-            this._layout.coolDown = serie.coolDown;
+            layout.large = serie.large;
+            layout.scaling = serie.scaling;
+            layout.ratioScaling = serie.ratioScaling;
+            layout.gravity = serie.gravity;
+            layout.temperature = 1;
+            layout.coolDown = serie.coolDown;
+            layout.preventNodeEdgeOverlap = serie.preventOverlap;
+            layout.preventNodeOverlap = serie.preventOverlap;
 
             // 将值映射到minRadius-maxRadius的范围上
             var min = Infinity; var max = -Infinity;
             for (var i = 0; i < len; i++) {
                 var gNode = graph.nodes[i];
-                gNode.layout = {
-                    radius: gNode.data.value || 1,
-                    mass: 0
-                };
-                max = Math.max(gNode.data.value, max);
-                min = Math.min(gNode.data.value, min);
+                max = Math.max(gNode.layout.size, max);
+                min = Math.min(gNode.layout.size, min);
             }
             var divider = max - min;
             for (var i = 0; i < len; i++) {
                 var gNode = graph.nodes[i];
                 if (divider > 0) {
-                    gNode.layout.radius = 
-                        (gNode.layout.radius - min) * (maxRadius - minRadius) / divider
+                    gNode.layout.size = 
+                        (gNode.layout.size - min) * (maxRadius - minRadius) / divider
                         + minRadius;
                     // 节点质量是归一的
-                    gNode.layout.mass = gNode.layout.radius / maxRadius;
+                    gNode.layout.mass = gNode.layout.size / maxRadius;
                 } else {
-                    gNode.layout.radius = (maxRadius - minRadius) / 2;
+                    gNode.layout.size = (maxRadius - minRadius) / 2;
                     gNode.layout.mass = 0.5;
                 }
             }
 
             for (var i = 0; i < len; i++) {
-                var initPos;
+                // var initPos;
                 var gNode = graph.nodes[i];
-                if (typeof(this.__nodePositionMap[gNode.name]) !== 'undefined') {
+                if (typeof(this.__nodePositionMap[gNode.id]) !== 'undefined') {
                     gNode.layout.position = vec2.create();
-                    vec2.copy(gNode.layout.position, this.__nodePositionMap[gNode.name]);
+                    vec2.copy(gNode.layout.position, this.__nodePositionMap[gNode.id]);
                 }
                 else if (typeof(gNode.data.initial) !== 'undefined') {
                     gNode.layout.position = vec2.create();
-                    vec2.copy(gNode.layout.position, gNode.data.initial)
+                    vec2.copy(gNode.layout.position, gNode.data.initial);
                 }
                 else {
                     var center = this._layout.center;
@@ -240,7 +468,7 @@ define(function (require) {
                     );
                 }
                 var style = gNode.shape.style;
-                var radius = gNode.layout.radius;
+                var radius = gNode.layout.size;
                 style.width = style.width || (radius * 2);
                 style.height = style.height || (radius * 2);
                 style.x = -style.width / 2;
@@ -253,9 +481,6 @@ define(function (require) {
             max = -Infinity;
             for (var i = 0; i < len; i++) {
                 var e = graph.edges[i];
-                e.layout = {
-                    weight: e.data.weight || 1
-                }
                 if (e.layout.weight > max) {
                     max = e.layout.weight;
                 }
@@ -269,57 +494,56 @@ define(function (require) {
             this._layout.init(graph, serie.useWorker);
         },
 
-        _buildNodeShapes: function(serie) {
+        _buildNodeShapes: function(serie, serieIdx) {
             var graph = this._graph;
 
             var categories = this.query(serie, 'categories');
-            var len = graph.nodes.length;
-            var legend = this.component.legend;
 
-            for (var i = 0; i < len; i++) {
-                var gNode = graph.nodes[i];
-                var node = gNode.data;
+            graph.eachNode(function (node) {
+                var category = this._getNodeCategory(serie, node.data);
+                var queryTarget = [node.data, category, serie];
+                var styleQueryTarget = this._getNodeQueryTarget(serie, node.data);
+                var emphasisStyleQueryTarget = this._getNodeQueryTarget(
+                    serie, node.data, 'emphasis'
+                );
 
                 var shape = new IconShape({
-                    style : {
-                        x : 0,
-                        y : 0
+                    style: {
+                        x: 0,
+                        y: 0,
+                        color: this.deepQuery(styleQueryTarget, 'color'),
+                        brushType: 'both',
+                        // 兼容原有写法
+                        strokeColor: this.deepQuery(styleQueryTarget, 'strokeColor')
+                            || this.deepQuery(styleQueryTarget, 'borderColor'),
+                        lineWidth: this.deepQuery(styleQueryTarget, 'lineWidth')
+                            || this.deepQuery(styleQueryTarget, 'borderWidth')
                     },
-                    clickable: this.query(serie, 'clickable'),
-                    highlightStyle : {}
+                    highlightStyle: {
+                        color: this.deepQuery(emphasisStyleQueryTarget, 'color'),
+                        // 兼容原有写法
+                        strokeColor: this.deepQuery(emphasisStyleQueryTarget, 'strokeColor')
+                            || this.deepQuery(emphasisStyleQueryTarget, 'borderColor'),
+                        lineWidth: this.deepQuery(emphasisStyleQueryTarget, 'lineWidth')
+                            || this.deepQuery(emphasisStyleQueryTarget, 'borderWidth')
+                    },
+                    clickable: serie.clickable,
+                    zlevel: this.getZlevelBase(),
+                    z: this.getZBase()
                 });
-
-                var queryTarget = [];
-                var shapeNormalStyle = [];
-                var shapeEmphasisStyle = [];
-
-                queryTarget.push(node);
-                if (node.itemStyle) {
-                    shapeNormalStyle.push(node.itemStyle.normal);
-                    shapeEmphasisStyle.push(node.itemStyle.emphasis);
+                if (!shape.style.color) {
+                    shape.style.color = category 
+                        ? this.getColor(category.name) : this.getColor(node.id);
                 }
-                if (typeof(node.category) !== 'undefined') {
-                    var category = categories[node.category];
-                    if (category) {
-                        // 使用 Legend.getColor 配置默认 category 的默认颜色
-                        category.itemStyle = category.itemStyle || {};
-                        category.itemStyle.normal = category.itemStyle.normal || {};
-                        category.itemStyle.normal.color = category.itemStyle.normal.color
-                            || legend.getColor(category.name);
-
-                        queryTarget.push(category);
-                        shapeNormalStyle.unshift(category.itemStyle.normal);
-                        shapeEmphasisStyle.unshift(category.itemStyle.emphasis);
-                    }
-                }
-                queryTarget.push(serie);
-                shapeNormalStyle.unshift(serie.itemStyle.normal.nodeStyle);
-                shapeEmphasisStyle.unshift(serie.itemStyle.emphasis.nodeStyle);
 
                 shape.style.iconType = this.deepQuery(queryTarget, 'symbol');
+                var symbolSize = this.deepQuery(queryTarget, 'symbolSize') || 0;
+                if (typeof symbolSize === 'number') {
+                    symbolSize = [symbolSize, symbolSize];
+                }
                 // 强制设定节点大小，否则默认映射到 minRadius 到 maxRadius 后的值
-                shape.style.width = shape.style.height
-                    = (this.deepQuery(queryTarget, 'symbolSize') || 0) * 2;
+                shape.style.width = symbolSize[0] * 2;
+                shape.style.height = symbolSize[1] * 2;
 
                 if (shape.style.iconType.match('image')) {
                     shape.style.image = shape.style.iconType.replace(
@@ -328,46 +552,36 @@ define(function (require) {
                     shape = new ImageShape({
                         style: shape.style,
                         highlightStyle: shape.highlightStyle,
-                        clickable: shape.clickable
+                        clickable: shape.clickable,
+                        zlevel: this.getZlevelBase(),
+                        z: this.getZBase()
                     });
-                }
-
-                // 节点样式
-                for (var k = 0; k < shapeNormalStyle.length; k++) {
-                    if (shapeNormalStyle[k]) {
-                        zrUtil.merge(shape.style, shapeNormalStyle[k], true);
-                    }
-                } 
-                // 节点高亮样式
-                for (var k = 0; k < shapeEmphasisStyle.length; k++) {
-                    if (shapeEmphasisStyle[k]) {
-                        zrUtil.merge(shape.highlightStyle, shapeEmphasisStyle[k], true);
-                    }
                 }
                 
                 // 节点标签样式
                 if (this.deepQuery(queryTarget, 'itemStyle.normal.label.show')) {
-                    shape.style.text = node.name;
-                    shape.style.textPosition = 'inside';
-                    var labelStyle = this.deepQuery(
+                    shape.style.text = node.data.label == null ? node.id : node.data.label;
+                    shape.style.textPosition = this.deepQuery(
+                        queryTarget, 'itemStyle.normal.label.position'
+                    ) ;
+                    shape.style.textColor = this.deepQuery(
+                        queryTarget, 'itemStyle.normal.label.textStyle.color'
+                    );
+                    shape.style.textFont = this.getFont(this.deepQuery(
                         queryTarget, 'itemStyle.normal.label.textStyle'
-                    ) || {};
-                    shape.style.textColor = labelStyle.color || '#fff';
-                    shape.style.textAlign = labelStyle.align || 'center';
-                    shape.style.textBaseline = labelStyle.baseline || 'middle';
-                    shape.style.textFont = this.getFont(labelStyle);
+                    ) || {});
                 }
 
                 if (this.deepQuery(queryTarget, 'itemStyle.emphasis.label.show')) {
-                    shape.highlightStyle.text = node.name;
-                    shape.highlightStyle.textPosition = 'inside';
-                    var labelStyle = this.deepQuery(
+                    shape.highlightStyle.textPosition = this.deepQuery(
+                        queryTarget, 'itemStyle.emphasis.label.position'
+                    );
+                    shape.highlightStyle.textColor = this.deepQuery(
+                        queryTarget, 'itemStyle.emphasis.label.textStyle.color'
+                    );
+                    shape.highlightStyle.textFont = this.getFont(this.deepQuery(
                         queryTarget, 'itemStyle.emphasis.label.textStyle'
-                    ) || {};
-                    shape.highlightStyle.textColor = labelStyle.color || '#fff';
-                    shape.highlightStyle.textAlign = labelStyle.align  || 'center';
-                    shape.highlightStyle.textBaseline = labelStyle.baseline || 'middle';
-                    shape.highlightStyle.textFont = this.getFont(labelStyle);
+                    ) || {});
                 }
 
                 // 拖拽特性
@@ -387,30 +601,27 @@ define(function (require) {
                 // !!Pack data before addShape
                 ecData.pack(
                     shape,
-                    // category
-                    {
-                        name : categoryName
-                    },
-                    // series index
-                    0,
+                    serie,
+                    serieIdx,
                     // data
-                    node,
+                    node.data,
                     // data index
-                    gNode.rawIndex,
+                    node.rawIndex,
                     // name
-                    node.name || '',
-                    // value
-                    node.value
+                    node.data.name || '',
+                    // category
+                    // special
+                    node.category
                 );
                 
                 this.shapeList.push(shape);
                 this.zr.addShape(shape);
 
-                gNode.shape = shape;
-            }
+                node.shape = shape;
+            }, this);
         },
 
-        _buildLinkShapes: function(serie) {
+        _buildLinkShapes: function(serie, serieIdx) {
             var graph = this._graph;
             var len = graph.edges.length;
 
@@ -420,17 +631,34 @@ define(function (require) {
                 var source = gEdge.node1;
                 var target = gEdge.node2;
 
-                var linkShape = new LineShape({
+                var otherEdge = graph.getEdge(target, source);
+
+                var queryTarget = this._getEdgeQueryTarget(serie, link);
+                var linkType = this.deepQuery(queryTarget, 'type');
+                // TODO 暂时只有线段支持箭头
+                if (serie.linkSymbol && serie.linkSymbol !== 'none') {
+                    linkType = 'line';
+                }
+                var LinkShapeCtor = linkType === 'line' ? LineShape : BezierCurveShape;
+
+                var linkShape = new LinkShapeCtor({
                     style : {
                         xStart : 0,
                         yStart : 0,
                         xEnd : 0,
-                        yEnd : 0,
-                        lineWidth : 1
+                        yEnd : 0
                     },
                     clickable: this.query(serie, 'clickable'),
-                    highlightStyle : {}
+                    highlightStyle : {},
+                    zlevel: this.getZlevelBase(),
+                    z: this.getZBase()
                 });
+
+                if (otherEdge && otherEdge.shape) {
+                    // 偏移一定位置放置双向边重叠
+                    linkShape.style.offset = 4;
+                    otherEdge.shape.style.offset = 4;
+                }
 
                 zrUtil.merge(
                     linkShape.style,
@@ -455,27 +683,34 @@ define(function (require) {
                     }
                 }
 
+                // 兼容原有写法
+                linkShape.style.lineWidth
+                    = linkShape.style.lineWidth || linkShape.style.width;
+                linkShape.style.strokeColor
+                    = linkShape.style.strokeColor || linkShape.style.color;
+                linkShape.highlightStyle.lineWidth
+                    = linkShape.highlightStyle.lineWidth || linkShape.highlightStyle.width;
+                linkShape.highlightStyle.strokeColor
+                    = linkShape.highlightStyle.strokeColor || linkShape.highlightStyle.color;
+
                 ecData.pack(
                     linkShape,
                     // serie
                     serie,
                     // serie index
-                    0,
+                    serieIdx,
                     // link data
-                    {
-                        source : source.data,
-                        target : target.data,
-                        weight : gEdge.data.weight || 0
-                    },
+                    gEdge.data,
                     // link data index
-                    gEdge.rawIndex,
+                    gEdge.rawIndex == null ? i : gEdge.rawIndex,
                     // source name - target name
-                    source.name + ' - ' + target.name,
-                    // link weight
-                    gEdge.data.weight || 0,
+                    gEdge.data.name || (source.id + ' - ' + target.id),
+                    // link source id
                     // special
-                    // 这一项只是为了表明这是条边
-                    true
+                    source.id,
+                    // link target id
+                    // special2
+                    target.id
                 );
 
                 this.shapeList.push(linkShape);
@@ -493,18 +728,15 @@ define(function (require) {
                             iconType: serie.linkSymbol,
                             brushType: 'fill',
                             // Use same style with link shape
-                            color: linkShape.style.strokeColor,
-                            opacity: linkShape.style.opacity,
-                            shadowBlur: linkShape.style.shadowBlur,
-                            shadowColor: linkShape.style.shadowColor,
-                            shadowOffsetX: linkShape.style.shadowOffsetX,
-                            shadowOffsetY: linkShape.style.shadowOffsetY
+                            color: linkShape.style.strokeColor
                         },
                         highlightStyle: {
                             brushType: 'fill'
                         },
                         position: [0, 0],
-                        rotation: 0
+                        rotation: 0,
+                        zlevel: this.getZlevelBase(),
+                        z: this.getZBase()
                     });
                     linkShape._symbolShape = symbolShape;
                     this.shapeList.push(symbolShape);
@@ -515,41 +747,54 @@ define(function (require) {
 
         _updateLinkShapes: function() {
             var v = vec2.create();
+            var n = vec2.create();
+            var p1 = vec2.create();
+            var p2 = vec2.create();
             var edges = this._graph.edges;
             for (var i = 0, len = edges.length; i < len; i++) {
                 var edge = edges[i];
                 var sourceShape = edge.node1.shape;
                 var targetShape = edge.node2.shape;
 
-                edge.shape.style.xStart = sourceShape.position[0];
-                edge.shape.style.yStart = sourceShape.position[1];
-                edge.shape.style.xEnd = targetShape.position[0];
-                edge.shape.style.yEnd = targetShape.position[1];
+                vec2.copy(p1, sourceShape.position);
+                vec2.copy(p2, targetShape.position);
 
-                this.zr.modShape(edge.shape.id);
+                var edgeShapeStyle = edge.shape.style;
+
+                vec2.sub(v, p1, p2);
+                vec2.normalize(v, v);
+
+                if (edgeShapeStyle.offset) {
+                    n[0] = v[1];
+                    n[1] = - v[0];
+
+                    vec2.scaleAndAdd(p1, p1, n, edgeShapeStyle.offset);
+                    vec2.scaleAndAdd(p2, p2, n, edgeShapeStyle.offset);
+                }
+                else if (edge.shape.type === 'bezier-curve') {
+                    edgeShapeStyle.cpX1 = (p1[0] + p2[0]) / 2 - (p2[1] - p1[1]) / 4;
+                    edgeShapeStyle.cpY1 = (p1[1] + p2[1]) / 2 - (p1[0] - p2[0]) / 4;
+                }
+
+                edgeShapeStyle.xStart = p1[0];
+                edgeShapeStyle.yStart = p1[1];
+                edgeShapeStyle.xEnd = p2[0];
+                edgeShapeStyle.yEnd = p2[1];
+
+                edge.shape.modSelf();
 
                 if (edge.shape._symbolShape) {
                     var symbolShape = edge.shape._symbolShape;
-                    vec2.copy(symbolShape.position, targetShape.position);
-
-                    vec2.sub(v, sourceShape.position, targetShape.position);
-                    vec2.normalize(v, v);
-
+                    vec2.copy(symbolShape.position, p2);
                     vec2.scaleAndAdd(
                         symbolShape.position, symbolShape.position,
                         v, targetShape.style.width / 2 + 2
                     );
 
-                    var angle;
-                    if (v[1] < 0) {
-                        angle = 2 * Math.PI - Math.acos(-v[0]);
-                    }
-                    else {
-                        angle = Math.acos(-v[0]);
-                    }
-                    symbolShape.rotation = angle - Math.PI / 2;
+                    var angle = Math.atan2(v[1], v[0]);
+                    symbolShape.rotation = Math.PI / 2 - angle;
 
-                    this.zr.modShape(symbolShape.id);
+                    symbolShape.modSelf();
                 }
             }
         },
@@ -561,20 +806,22 @@ define(function (require) {
                 var position = gNode.layout.position;
                 var node = gNode.data;
                 var shape = gNode.shape;
-                if (shape.fixed || (node.fixX && node.fixY)) {
-                    vec2.copy(position, shape.position);
+                var fixX = shape.fixed || node.fixX;
+                var fixY = shape.fixed || node.fixY;
+                if (fixX === true) {
+                    fixX = 1;
+                } else if (isNaN(fixX)) {
+                    fixX = 0;
                 }
-                else if (node.fixX) {
-                    position[0] = shape.position[0];
-                    shape.position[1] = position[1];
+                if (fixY === true) {
+                    fixY = 1;
+                } else if (isNaN(fixY)) {
+                    fixY = 0;
                 }
-                else if (node.fixY) {
-                    position[1] = shape.position[1];
-                    shape.position[0] = position[0];
-                }
-                else  {
-                    vec2.copy(shape.position, position);
-                }
+                shape.position[0] += (position[0] - shape.position[0]) * (1 - fixX);
+                shape.position[1] += (position[1] - shape.position[1]) * (1 - fixY);
+
+                vec2.copy(position, shape.position);
 
                 var nodeName = node.name;
                 if (nodeName) {
@@ -585,7 +832,7 @@ define(function (require) {
                     vec2.copy(gPos, position);
                 }
 
-                this.zr.modShape(shape.id);
+                shape.modSelf();
             }
         },
 
@@ -598,6 +845,13 @@ define(function (require) {
 
             if (this._layout.temperature > 0.01) {
                 this._layout.step(this._steps);
+            } else {
+                this.messageCenter.dispatch(
+                    ecConfig.EVENT.FORCE_LAYOUT_END,
+                    {},
+                    {},
+                    this.myChart
+                );
             }
         },
 
@@ -606,6 +860,34 @@ define(function (require) {
                 this.option = newOption;
                 this.series = this.option.series;
             }
+
+            this.legend = this.component.legend;
+            if (this.legend) {
+                this.getColor = function(param) {
+                    return this.legend.getColor(param);
+                };
+                this.isSelected = function(param) {
+                    return this.legend.isSelected(param);
+                };
+            }
+            else {
+                var colorMap = {};
+                var count = 0;
+                this.getColor = function (key) {
+                    if (colorMap[key]) {
+                        return colorMap[key];
+                    }
+                    if (!colorMap[key]) {
+                        colorMap[key] = this.zr.getColor(count++);
+                    }
+
+                    return colorMap[key];
+                };
+                this.isSelected = function () {
+                    return true;
+                };
+            }
+
             this._init();
         },
 
@@ -618,6 +900,19 @@ define(function (require) {
             this._layout = null;
 
             this.__nodePositionMap = {};
+        },
+
+        getPosition: function () {
+            var position = [];
+            this._graph.eachNode(function (n) {
+                if (n.layout) {
+                    position.push({
+                        name: n.data.name,
+                        position: Array.prototype.slice.call(n.layout.position)
+                    });
+                }
+            });
+            return position;
         }
     };
 
@@ -672,20 +967,8 @@ define(function (require) {
         v[1] = (Math.random() - 0.5) * size + y;
         return v;
     }
-
-    function _filter(array, callback){
-        var len = array.length;
-        var result = [];
-        for(var i = 0; i < len; i++){
-            if(callback(array[i], i)){
-                result.push(array[i]);
-            }
-        }
-        return result;
-    }
     
     zrUtil.inherits(Force, ChartBase);
-    zrUtil.inherits(Force, ComponentBase);
     
     // 图表注册
     require('../chart').define('force', Force);

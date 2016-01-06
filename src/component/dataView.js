@@ -2,7 +2,7 @@
  * echarts组件：提示框
  *
  * @desc echarts基于Canvas，纯Javascript图表库，提供直观，生动，可交互，可个性化定制的数据统计图表。
- * @author Kener (@Kener-林峰, linzhifeng@baidu.com)
+ * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
  *
  */
 define(function (require) {
@@ -27,14 +27,19 @@ define(function (require) {
         this._tDom = document.createElement('div');
         this._textArea = document.createElement('textArea');
         this._buttonRefresh = document.createElement('button');
+        // 高级浏览器默认type为submit
+        // 如果图表出现在form表单时，点击button后会提交表单
+        // 设置为button，防止点击button后提交表单
+        this._buttonRefresh.setAttribute('type', 'button');
         this._buttonClose = document.createElement('button');
+        this._buttonClose.setAttribute('type', 'button');
         this._hasShow = false;
 
         // 缓存一些高宽数据
         this._zrHeight = zr.getHeight();
         this._zrWidth = zr.getWidth();
     
-        this._tDom.className = 'echarts-dataview',
+        this._tDom.className = 'echarts-dataview';
         this.hide();
         this.dom.firstChild.appendChild(this._tDom);
 
@@ -98,10 +103,6 @@ define(function (require) {
                               + (lang[0] || this._lang[0])
                               + '</p>';
 
-            this._textArea.style.cssText =
-                'display:block;margin:0 0 8px 0;padding:4px 6px;overflow:auto;'
-                + 'width:' + (this._zrWidth - 15) + 'px;'
-                + 'height:' + (this._zrHeight - 100) + 'px;';
             var customContent = this.query(
                 this.option, 'toolbox.feature.dataView.optionToContent'
             );
@@ -109,8 +110,16 @@ define(function (require) {
                 this._textArea.value = this._optionToContent();
             }
             else {
-                this._textArea.value = customContent(this.option);
+                // innerHTML the custom optionToContent;
+                this._textArea = document.createElement('div');
+                this._textArea.innerHTML = customContent(this.option);
             }
+
+            this._textArea.style.cssText =
+                'display:block;margin:0 0 8px 0;padding:4px 6px;overflow:auto;'
+                + 'width:100%;'
+                + 'height:' + (this._zrHeight - 100) + 'px;';
+
             this._tDom.appendChild(this._textArea);
 
             this._buttonClose.style.cssText = 'float:right;padding:1px 6px;';
@@ -130,14 +139,16 @@ define(function (require) {
                 this._buttonRefresh.onclick = function (){
                     self._save();
                 };
-                this._tDom.appendChild(this._buttonRefresh);
                 this._textArea.readOnly = false;
                 this._textArea.style.cursor = 'default';
             }
             else {
+                this._buttonRefresh.style.cssText =
+                    'display:none';
                 this._textArea.readOnly = true;
                 this._textArea.style.cursor = 'text';
             }
+            this._tDom.appendChild(this._buttonRefresh);
 
             this._sizeCssText = 'width:' + this._zrWidth + 'px;'
                            + 'height:' + this._zrHeight + 'px;'
@@ -171,11 +182,7 @@ define(function (require) {
                     if ((axisList[i].type || 'category') == 'category') {
                         valueList = [];
                         for (j = 0, k = axisList[i].data.length; j < k; j++) {
-                            data = axisList[i].data[j];
-                            valueList.push(
-                                typeof data.value != 'undefined'
-                                ? data.value : data
-                            );
+                            valueList.push(this.getDataFromOption(axisList[i].data[j]));
                         }
                         content += valueList.join(', ') + '\n\n';
                     }
@@ -192,11 +199,7 @@ define(function (require) {
                     if (axisList[i].type  == 'category') {
                         valueList = [];
                         for (j = 0, k = axisList[i].data.length; j < k; j++) {
-                            data = axisList[i].data[j];
-                            valueList.push(
-                                typeof data.value != 'undefined'
-                                ? data.value : data
-                            );
+                            valueList.push(this.getDataFromOption(axisList[i].data[j]));
                         }
                         content += valueList.join(', ') + '\n\n';
                     }
@@ -219,15 +222,9 @@ define(function (require) {
                     }
                     
                     if (series[i].type == ecConfig.CHART_TYPE_SCATTER) {
-                        data = typeof data.value != 'undefined' 
-                               ? data.value
-                               : data;
-                        data = data.join(', ');
+                        data = this.getDataFromOption(data).join(', ');
                     }
-                    valueList.push(
-                        itemName
-                        + (typeof data.value != 'undefined' ? data.value : data)
-                    );
+                    valueList.push(itemName + this.getDataFromOption(data));
                 }
                 content += (series[i].name || '-') + ' : \n';
                 content += valueList.join(
@@ -240,12 +237,11 @@ define(function (require) {
         },
 
         _save : function () {
-            var text = this._textArea.value;
             var customContent = this.query(
                 this.option, 'toolbox.feature.dataView.contentToOption'
             );
             if (typeof customContent != 'function') {
-                text = text.split('\n');
+                var text = this._textArea.value.split('\n');
                 var content = [];
                 for (var i = 0, l = text.length; i < l; i++) {
                     text[i] = this._trim(text[i]);
@@ -256,7 +252,8 @@ define(function (require) {
                 this._contentToOption(content);
             }
             else {
-                customContent(text, this.option);
+                // return the textArea dom for custom contentToOption
+                customContent(this._textArea, this.option);
             }
 
             this.hide();
@@ -409,7 +406,7 @@ define(function (require) {
                 this._tDom.style.cssText = this._gCssText + this._sizeCssText;
                 this._textArea.style.cssText = 'display:block;margin:0 0 8px 0;'
                                         + 'padding:4px 6px;overflow:auto;'
-                                        + 'width:' + (this._zrWidth - 15) + 'px;'
+                                        + 'width:100%;'
                                         + 'height:' + (this._zrHeight - 100) + 'px;';
             }
         },

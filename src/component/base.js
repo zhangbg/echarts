@@ -2,11 +2,12 @@
  * echarts组件基类
  *
  * @desc echarts基于Canvas，纯Javascript图表库，提供直观，生动，可交互，可个性化定制的数据统计图表。
- * @author Kener (@Kener-林峰, linzhifeng@baidu.com)
+ * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
  *
  */
 define(function (require) {
     var ecConfig = require('../config');
+    var ecData = require('../util/ecData');
     var ecQuery = require('../util/ecQuery');
     var number = require('../util/number');
     var zrUtil = require('zrender/tool/util');
@@ -19,36 +20,33 @@ define(function (require) {
         this.series = option.series;
         this.myChart = myChart;
         this.component = myChart.component;
-        
-        this._zlevelBase = this.getZlevelBase();
+
         this.shapeList = [];
         this.effectList = [];
         
         var self = this;
-        self.hoverConnect = function (param) {
-            var target = (param.target || {}).hoverConnect;
-            if (target) {
-                var zlevel = 10;
-                var shape;
-                if (!(target instanceof Array)) {
-                    shape = self.getShapeById(target);
-                    if (shape) {
-                        self.zr.addHoverShape(shape);
-                        zlevel = Math.min(zlevel, shape.zlevel);
+        
+        self._onlegendhoverlink = function(param) {
+            if (self.legendHoverLink) {
+                var targetName = param.target;
+                var name;
+                for (var i = self.shapeList.length - 1; i >= 0; i--) {
+                    name = self.type == ecConfig.CHART_TYPE_PIE
+                           || self.type == ecConfig.CHART_TYPE_FUNNEL
+                           ? ecData.get(self.shapeList[i], 'name')
+                           : (ecData.get(self.shapeList[i], 'series') || {}).name;
+                    if (name == targetName 
+                        && !self.shapeList[i].invisible 
+                        && !self.shapeList[i].__animating
+                    ) {
+                        self.zr.addHoverShape(self.shapeList[i]);
                     }
-                }
-                else {
-                    for (var i = 0, l = target.length; i < l; i++) {
-                        shape = self.getShapeById(target[i]);
-                        self.zr.addHoverShape(shape);
-                        zlevel = Math.min(zlevel, shape.zlevel);
-                    }
-                }
-                if (zlevel < param.target.zlevel) {
-                    self.zr.addHoverShape(param.target);
                 }
             }
         };
+        messageCenter && messageCenter.bind(
+            ecConfig.EVENT.LEGEND_HOVERLINK, this._onlegendhoverlink
+        );
     }
 
     /**
@@ -56,54 +54,33 @@ define(function (require) {
      */
     Base.prototype = {
         canvasSupported: require('zrender/tool/env').canvasSupported,
+        _getZ : function(zWhat) {
+            if (this[zWhat] != null) {
+                return this[zWhat];
+            }
+            var opt = this.ecTheme[this.type];
+            if (opt && opt[zWhat] != null) {
+                return opt[zWhat];
+            }
+            opt = ecConfig[this.type];
+            if (opt && opt[zWhat] != null) {
+                return opt[zWhat];
+            }
+            return 0;
+        },
+
         /**
          * 获取zlevel基数配置
-         * @param {Object} contentType
          */
-        getZlevelBase: function (contentType) {
-            contentType = contentType || this.type + '';
-
-            switch (contentType) {
-                case ecConfig.COMPONENT_TYPE_GRID :
-                case ecConfig.COMPONENT_TYPE_AXIS_CATEGORY :
-                case ecConfig.COMPONENT_TYPE_AXIS_VALUE :
-                case ecConfig.COMPONENT_TYPE_POLAR :
-                    return 0;
-
-                case ecConfig.CHART_TYPE_LINE :
-                case ecConfig.CHART_TYPE_BAR :
-                case ecConfig.CHART_TYPE_SCATTER :
-                case ecConfig.CHART_TYPE_PIE :
-                case ecConfig.CHART_TYPE_RADAR :
-                case ecConfig.CHART_TYPE_MAP :
-                case ecConfig.CHART_TYPE_K :
-                case ecConfig.CHART_TYPE_CHORD:
-                case ecConfig.CHART_TYPE_GUAGE:
-                case ecConfig.CHART_TYPE_FUNNEL:
-                    return 2;
-
-                case ecConfig.COMPONENT_TYPE_LEGEND :
-                case ecConfig.COMPONENT_TYPE_DATARANGE:
-                case ecConfig.COMPONENT_TYPE_DATAZOOM :
-                case ecConfig.COMPONENT_TYPE_TIMELINE :
-                case ecConfig.COMPONENT_TYPE_ROAMCONTROLLER :
-                    return 4;
-
-                case ecConfig.CHART_TYPE_ISLAND :
-                    return 5;
-
-                case ecConfig.COMPONENT_TYPE_TOOLBOX :
-                case ecConfig.COMPONENT_TYPE_TITLE :
-                    return 6;
-
-                // ecConfig.EFFECT_ZLEVEL = 7;
-                
-                case ecConfig.COMPONENT_TYPE_TOOLTIP :
-                    return 8;
-
-                default :
-                    return 0;
-            }
+        getZlevelBase: function () {
+            return this._getZ('zlevel');
+        },
+        
+        /**
+         * 获取z基数配置
+         */
+        getZBase: function() {
+            return this._getZ('z');
         },
 
         /**
@@ -113,10 +90,17 @@ define(function (require) {
          * @return {Object} 修正后的参数
          */
         reformOption: function (opt) {
-            return zrUtil.merge(
-                       opt || {},
-                       zrUtil.clone(this.ecTheme[this.type] || {})
+            // 默认配置项动态多级合并，依赖加载的组件选项未被merge到ecTheme里，需要从config里取
+            opt = zrUtil.merge(
+                       zrUtil.merge(
+                           opt || {},
+                           zrUtil.clone(this.ecTheme[this.type] || {})
+                       ),
+                       zrUtil.clone(ecConfig[this.type] || {})
                    );
+            this.z = opt.z;
+            this.zlevel = opt.zlevel;
+            return opt;
         },
         
         /**
@@ -141,7 +125,7 @@ define(function (require) {
                 return [p, p, p, p];
             }
         },
-
+        
         getShapeById: function(id) {
             for (var i = 0, l = this.shapeList.length; i < l; i++) {
                 if (this.shapeList[i].id === id) {
@@ -155,21 +139,50 @@ define(function (require) {
          * 获取自定义和默认配置合并后的字体设置
          */
         getFont: function (textStyle) {
-            var finalTextStyle = zrUtil.merge(
-                zrUtil.clone(textStyle) || {},
-                this.ecTheme.textStyle
+            var finalTextStyle = this.getTextStyle(
+                zrUtil.clone(textStyle)
             );
             return finalTextStyle.fontStyle + ' '
                    + finalTextStyle.fontWeight + ' '
                    + finalTextStyle.fontSize + 'px '
                    + finalTextStyle.fontFamily;
         },
+
+        /**
+         * 获取统一主题字体样式
+         */
+        getTextStyle: function(targetStyle) {
+            return zrUtil.merge(
+                       zrUtil.merge(
+                           targetStyle || {},
+                           this.ecTheme.textStyle
+                       ),
+                       ecConfig.textStyle
+                   );
+        },
         
         getItemStyleColor: function (itemColor, seriesIndex, dataIndex, data) {
             return typeof itemColor === 'function'
-                   ? itemColor(seriesIndex, dataIndex, data) : itemColor;
+                   ? itemColor.call(
+                        this.myChart,
+                        {
+                            seriesIndex: seriesIndex,
+                            series: this.series[seriesIndex],
+                            dataIndex: dataIndex,
+                            data: data
+                        }
+                   )
+                   : itemColor;
             
-        },        
+        }, 
+
+        /**
+         * @parmas {object | number} data 目标data
+         * @params {string= | number=} defaultData 无数据时默认返回
+         */
+        getDataFromOption: function (data, defaultData) {
+            return data != null ? (data.value != null ? data.value : data) : defaultData;
+        },
         
         // 亚像素优化
         subPixelOptimize: function (position, lineWidth) {
@@ -183,7 +196,7 @@ define(function (require) {
             return position;
         },
         
-        
+        // 默认resize
         resize: function () {
             this.refresh && this.refresh();
             this.clearEffectShape && this.clearEffectShape(true);
@@ -206,9 +219,14 @@ define(function (require) {
          * 释放后实例不可用
          */
         dispose: function () {
+            this.onbeforDispose && this.onbeforDispose();
             this.clear();
             this.shapeList = null;
             this.effectList = null;
+            this.messageCenter && this.messageCenter.unbind(
+                ecConfig.EVENT.LEGEND_HOVERLINK, this._onlegendhoverlink
+            );
+            this.onafterDispose && this.onafterDispose();
         },
         
         query: ecQuery.query,
@@ -218,7 +236,9 @@ define(function (require) {
         parsePercent: number.parsePercent,
         parseCenter: number.parseCenter,
         parseRadius: number.parseRadius,
-        numAddCommas: number.addCommas
+        numAddCommas: number.addCommas,
+
+        getPrecision: number.getPrecision
     };
     
     return Base;

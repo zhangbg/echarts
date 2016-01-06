@@ -2,7 +2,7 @@
  * echarts 百度地图扩展，必须在echarts初始化前使用
  *
  * @desc echarts基于Canvas，纯Javascript图表库，提供直观，生动，可交互，可个性化定制的数据统计图表。
- * @author Neil (杨骥, yangji01@baidu.com)
+ * @author Neil (杨骥, 511415343@qq.com)
  */
 define(function (require) {
 
@@ -12,10 +12,11 @@ define(function (require) {
      * @param {String|HTMLElement|BMap.Map} obj
      * @param {BMap} BMap
      * @param {echarts} ec
+     * @parma {Object=} mapOption 百度地图初始化选项
      * @constructor
      */
-    function BMapExt(obj, BMap, ec) {
-        this._init(obj, BMap, ec);
+    function BMapExt(obj, BMap, ec, mapOption) {
+        this._init(obj, BMap, ec, mapOption);
     };
 
     /**
@@ -31,7 +32,7 @@ define(function (require) {
      *
      * @type {BMap.Map}
      * @private
-     */ 
+     */
     BMapExt.prototype._map = null;
 
     /**
@@ -66,10 +67,10 @@ define(function (require) {
      * @param {BMap} BMap
      * @param {echarts} ec
      * @private
-     */ 
-    BMapExt.prototype._init = function (obj, BMap, ec) {
+     */
+    BMapExt.prototype._init = function (obj, BMap, ec, mapOption) {
         var self = this;
-        self._map = obj.constructor == BMap.Map ? obj : new BMap.Map(obj);
+        self._map = obj.constructor == BMap.Map ? obj : new BMap.Map(obj, mapOption);
 
         /**
          * Overlay类,用来生成覆盖物
@@ -174,8 +175,37 @@ define(function (require) {
         self.initECharts = function () {
             self._ec = ec.init.apply(self, arguments);
             self._bindEvent();
+            self._addMarkWrap();
             return self._ec;
-        }
+        };
+
+        // addMark wrap for get position from baidu map by geo location
+        // by kener at 2015.01.08
+        self._addMarkWrap = function () {
+            function _addMark (seriesIdx, markData, markType) {
+                var data;
+                if (markType == 'markPoint') {
+                    var data = markData.data;
+                    if (data && data.length) {
+                        for (var k = 0, len = data.length; k < len; k++) {
+                            self._AddPos(data[k]);
+                        }
+                    }
+                }
+                else {
+                    data = markData.data;
+                    if (data && data.length) {
+                        for (var k = 0, len = data.length; k < len; k++) {
+                            self._AddPos(data[k][0]);
+                            self._AddPos(data[k][1]);
+                        }
+                    }
+                }
+                self._ec._addMarkOri(seriesIdx, markData, markType);
+            }
+            self._ec._addMarkOri = self._ec._addMark;
+            self._ec._addMark = _addMark;
+        };
 
         /**
          * 获取ECharts实例
@@ -204,7 +234,7 @@ define(function (require) {
          * @param {Object}
          * @public
          */
-        self.setOption = function (option) {
+        self.setOption = function (option, notMerge) {
             var series = option.series || {};
 
             // 记录所有的geoCoord
@@ -224,21 +254,21 @@ define(function (require) {
 
                 var data = markPoint.data;
                 if (data && data.length) {
-                    for (var k in data) {
+                    for (var k = 0, len = data.length; k < len; k++) {
                         self._AddPos(data[k]);
                     }
                 }
 
                 data = markLine.data;
                 if (data && data.length) {
-                    for (var k in data) {
+                    for (var k = 0, len = data.length; k < len; k++) {
                         self._AddPos(data[k][0]);
                         self._AddPos(data[k][1]);
                     }
                 }
             }
 
-            self._ec.setOption(option);
+            self._ec.setOption(option, notMerge);
         }
 
         /**
@@ -338,10 +368,21 @@ define(function (require) {
         self.refresh = function () {
             if (self._ec) {
                 var option = self._ec.getOption();
+                var component = self._ec.component || {};
+                var legend = component.legend;
+                var dataRange = component.dataRange;
+
+                if (legend) {
+                    option.legend.selected = legend.getSelectedMap();
+                }
+
+                if (dataRange) {
+                    option.dataRange.range = dataRange._range;
+                }
                 self._ec.clear();
                 self.setOption(option);
             }
-        }
+        };
 
         self._map.addOverlay(myOverlay);
     };

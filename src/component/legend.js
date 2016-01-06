@@ -2,7 +2,7 @@
  * echarts组件：图例
  *
  * @desc echarts基于Canvas，纯Javascript图表库，提供直观，生动，可交互，可个性化定制的数据统计图表。
- * @author Kener (@Kener-林峰, linzhifeng@baidu.com)
+ * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
  *
  */
 define(function (require) {
@@ -17,6 +17,36 @@ define(function (require) {
     var CandleShape = require('../util/shape/Candle');
     
     var ecConfig = require('../config');
+     // 图例
+    ecConfig.legend = {
+        zlevel: 0,                  // 一级层叠
+        z: 4,                       // 二级层叠
+        show: true,
+        orient: 'horizontal',      // 布局方式，默认为水平布局，可选为：
+                                   // 'horizontal' ¦ 'vertical'
+        x: 'center',               // 水平安放位置，默认为全图居中，可选为：
+                                   // 'center' ¦ 'left' ¦ 'right'
+                                   // ¦ {number}（x坐标，单位px）
+        y: 'top',                  // 垂直安放位置，默认为全图顶端，可选为：
+                                   // 'top' ¦ 'bottom' ¦ 'center'
+                                   // ¦ {number}（y坐标，单位px）
+        backgroundColor: 'rgba(0,0,0,0)',
+        borderColor: '#ccc',       // 图例边框颜色
+        borderWidth: 0,            // 图例边框线宽，单位px，默认为0（无边框）
+        padding: 5,                // 图例内边距，单位px，默认各方向内边距为5，
+                                   // 接受数组分别设定上右下左边距，同css
+        itemGap: 10,               // 各个item之间的间隔，单位px，默认为10，
+                                   // 横向布局时为水平间隔，纵向布局时为纵向间隔
+        itemWidth: 20,             // 图例图形宽度
+        itemHeight: 14,            // 图例图形高度
+        textStyle: {
+            color: '#333'          // 图例文字颜色
+        },
+        selectedMode: true         // 选择模式，默认开启图例开关
+        // selected: null,         // 配置默认选中状态，可配合LEGEND.SELECTED事件做动态数据载入
+        // data: [],               // 图例内容（详见legend.data，数组中每一项代表一个item
+    };
+
     var zrUtil = require('zrender/tool/util');
     var zrArea = require('zrender/tool/area');
 
@@ -38,10 +68,14 @@ define(function (require) {
         self._legendSelected = function (param) {
             self.__legendSelected(param);
         };
+        self._dispatchHoverLink = function(param) {
+            return self.__dispatchHoverLink(param);
+        };
         
         this._colorIndex = 0;
         this._colorMap = {};
         this._selectedMap = {};
+        this._hasDataMap = {};
         
         this.refresh(option);
     }
@@ -49,6 +83,9 @@ define(function (require) {
     Legend.prototype = {
         type: ecConfig.COMPONENT_TYPE_LEGEND,
         _buildShape: function () {
+            if (!this.legendOption.show) {
+                return;
+            }
             // 图例元素组的位置参数，通过计算所得x, y, width, height
             this._itemGroupLocation = this._getItemGroupLocation();
 
@@ -146,7 +183,7 @@ define(function (require) {
                 itemShape = this._getItemShapeByType(
                     lastX, lastY,
                     itemWidth, itemHeight,
-                    (this._selectedMap[itemName] ? color : '#ccc'),
+                    (this._selectedMap[itemName] && this._hasDataMap[itemName] ? color : '#ccc'),
                     itemType,
                     color
                 );
@@ -156,7 +193,8 @@ define(function (require) {
                 // 文字
                 textShape = {
                     // shape: 'text',
-                    zlevel: this._zlevelBase,
+                    zlevel: this.getZlevelBase(),
+                    z: this.getZBase(),
                     style: {
                         x: lastX + itemWidth + 5,
                         y: lastY + itemHeight / 2,
@@ -187,7 +225,7 @@ define(function (require) {
                 
                 if (this.legendOption.selectedMode) {
                     itemShape.onclick = textShape.onclick = this._legendSelected;
-                    itemShape.onmouseover =  textShape.onmouseover = this.hoverConnect;
+                    itemShape.onmouseover =  textShape.onmouseover = this._dispatchHoverLink;
                     itemShape.hoverConnect = textShape.id;
                     textShape.hoverConnect = itemShape.id;
                 }
@@ -288,19 +326,17 @@ define(function (require) {
         },
 
         _buildBackground: function () {
-            var pTop = this.legendOption.padding[0];
-            var pRight = this.legendOption.padding[1];
-            var pBottom = this.legendOption.padding[2];
-            var pLeft = this.legendOption.padding[3];
+            var padding = this.reformCssArray(this.legendOption.padding);
 
             this.shapeList.push(new RectangleShape({
-                zlevel: this._zlevelBase,
+                zlevel: this.getZlevelBase(),
+                z: this.getZBase(),
                 hoverable :false,
                 style: {
-                    x: this._itemGroupLocation.x - pLeft,
-                    y: this._itemGroupLocation.y - pTop,
-                    width: this._itemGroupLocation.width + pLeft + pRight,
-                    height: this._itemGroupLocation.height + pTop + pBottom,
+                    x: this._itemGroupLocation.x - padding[3],
+                    y: this._itemGroupLocation.y - padding[0],
+                    width: this._itemGroupLocation.width + padding[3] + padding[1],
+                    height: this._itemGroupLocation.height + padding[0] + padding[2],
                     brushType: this.legendOption.borderWidth === 0 ? 'fill' : 'both',
                     color: this.legendOption.backgroundColor,
                     strokeColor: this.legendOption.borderColor,
@@ -322,7 +358,7 @@ define(function (require) {
             var font = this.getFont(textStyle);
             var totalWidth = 0;
             var totalHeight = 0;
-            var padding = this.legendOption.padding;
+            var padding = this.reformCssArray(this.legendOption.padding);
             var zrWidth = this.zr.getWidth() - padding[1] - padding[3];
             var zrHeight = this.zr.getHeight() - padding[0] - padding[2];
             
@@ -334,36 +370,31 @@ define(function (require) {
                 for (var i = 0; i < dataLength; i++) {
                     if (this._getName(data[i]) === '') {
                         temp -= itemGap;
-                        if (temp > zrWidth) {
-                            totalWidth = zrWidth;
-                            totalHeight += itemHeight + itemGap;
-                        }
-                        else {
-                            totalWidth = Math.max(totalWidth, temp);
-                        }
+                        totalWidth = Math.max(totalWidth, temp);
                         totalHeight += itemHeight + itemGap;
                         temp = 0;
                         continue;
                     }
-                    temp += itemWidth
-                            + zrArea.getTextWidth(
-                                  this._getFormatterNameFromData(data[i]),
-                                  data[i].textStyle 
-                                  ? this.getFont(zrUtil.merge(
-                                        data[i].textStyle || {},
-                                        textStyle
-                                    ))
-                                  : font
-                              )
-                            + itemGap;
-                }
-                totalHeight = Math.max(totalHeight, itemHeight);
-                temp -= itemGap;    // 减去最后一个的itemGap
-                if (temp > zrWidth) {
-                    totalWidth = zrWidth;
-                    totalHeight += itemHeight + itemGap;
-                } else {
-                    totalWidth = Math.max(totalWidth, temp);
+                    var tempTextWidth = zrArea.getTextWidth(
+                        this._getFormatterNameFromData(data[i]),
+                        data[i].textStyle 
+                        ? this.getFont(zrUtil.merge(
+                            data[i].textStyle || {},
+                            textStyle
+                          ))
+                        : font
+                    );
+                    if (temp + itemWidth + tempTextWidth + itemGap > zrWidth) {
+                        // new line
+                        temp -= itemGap;  // 减去最后一个的itemGap
+                        totalWidth = Math.max(totalWidth, temp);
+                        totalHeight += itemHeight + itemGap;
+                        temp = 0;
+                    }
+                    else {
+                        temp += itemWidth + tempTextWidth + itemGap;
+                        totalWidth = Math.max(totalWidth, temp - itemGap);
+                    }
                 }
             }
             else {
@@ -386,27 +417,23 @@ define(function (require) {
                 totalWidth = maxWidth;
                 for (var i = 0; i < dataLength; i++) {
                     if (this._getName(data[i]) === '') {
-                        temp -= itemGap;
-                        if (temp > zrHeight) {
-                            totalHeight = zrHeight;
-                            totalWidth += maxWidth + itemGap;
-                        }
-                        else {
-                            totalHeight = Math.max(totalHeight, temp);
-                        }
                         totalWidth += maxWidth + itemGap;
+                        temp -= itemGap;  // 减去最后一个的itemGap
+                        totalHeight = Math.max(totalHeight, temp);
                         temp = 0;
                         continue;
                     }
-                    temp += itemHeight + itemGap;
-                }
-                totalWidth = Math.max(totalWidth, maxWidth);
-                temp -= itemGap;    // 减去最后一个的itemGap
-                if (temp > zrHeight) {
-                    totalHeight = zrHeight;
-                    totalWidth += maxWidth + itemGap;
-                } else {
-                    totalHeight = Math.max(totalHeight, temp);
+                    if (temp + itemHeight + itemGap > zrHeight) {
+                        // new line
+                        totalWidth += maxWidth + itemGap;
+                        temp -= itemGap;  // 减去最后一个的itemGap
+                        totalHeight = Math.max(totalHeight, temp);
+                        temp = 0;
+                    }
+                    else {
+                        temp += itemHeight + itemGap;
+                        totalHeight = Math.max(totalHeight, temp - itemGap);
+                    }
                 }
             }
 
@@ -418,13 +445,13 @@ define(function (require) {
                     x = Math.floor((zrWidth - totalWidth) / 2);
                     break;
                 case 'left' :
-                    x = this.legendOption.padding[3] + this.legendOption.borderWidth;
+                    x = padding[3] + this.legendOption.borderWidth;
                     break;
                 case 'right' :
                     x = zrWidth
                         - totalWidth
-                        - this.legendOption.padding[1]
-                        - this.legendOption.padding[3]
+                        - padding[1]
+                        - padding[3]
                         - this.legendOption.borderWidth * 2;
                     break;
                 default :
@@ -435,13 +462,13 @@ define(function (require) {
             var y;
             switch (this.legendOption.y) {
                 case 'top' :
-                    y = this.legendOption.padding[0] + this.legendOption.borderWidth;
+                    y = padding[0] + this.legendOption.borderWidth;
                     break;
                 case 'bottom' :
                     y = zrHeight
                         - totalHeight
-                        - this.legendOption.padding[0]
-                        - this.legendOption.padding[2]
+                        - padding[0]
+                        - padding[2]
                         - this.legendOption.borderWidth * 2;
                     break;
                 case 'center' :
@@ -485,10 +512,10 @@ define(function (require) {
                     || series[i].type === ecConfig.CHART_TYPE_CHORD
                     || series[i].type === ecConfig.CHART_TYPE_FORCE
                     || series[i].type === ecConfig.CHART_TYPE_FUNNEL
+                    || series[i].type === ecConfig.CHART_TYPE_TREEMAP
                 ) {
-                    data = series[i].type != ecConfig.CHART_TYPE_FORCE
-                           ? series[i].data         // 饼图、雷达图、和弦图得查找里面的数据名字
-                           : series[i].categories;  // 力导布局查找categories配置
+                    data = series[i].categories || series[i].data || series[i].nodes;
+
                     for (var j = 0, k = data.length; j < k; j++) {
                         if (data[j].name === name) {
                             return {
@@ -514,7 +541,8 @@ define(function (require) {
         _getItemShapeByType: function (x, y, width, height, color, itemType, defaultColor) {
             var highlightColor = color === '#ccc' ? defaultColor : color;
             var itemShape = {
-                zlevel: this._zlevelBase,
+                zlevel: this.getZlevelBase(),
+                z: this.getZBase(),
                 style: {
                     iconType: 'legendicon' + itemType,
                     x: x,
@@ -548,6 +576,9 @@ define(function (require) {
                     itemShape.highlightStyle.lineWidth = 3;
                     break;
                 case 'radar':
+                case 'venn':
+                case 'tree':
+                case 'treemap':
                 case 'scatter':
                     itemShape.highlightStyle.lineWidth = 3;
                     break;
@@ -555,11 +586,15 @@ define(function (require) {
                     itemShape.style.brushType = 'both';
                     itemShape.highlightStyle.lineWidth = 3;
                     itemShape.highlightStyle.color =
-                    itemShape.style.color = this.query(this.ecTheme, 'k.itemStyle.normal.color') 
-                                            || '#fff';
+                    itemShape.style.color = this.deepQuery(
+                        [this.ecTheme, ecConfig], 'k.itemStyle.normal.color'
+                    ) || '#fff';
                     itemShape.style.strokeColor = color != '#ccc' 
-                        ? (this.query(this.ecTheme, 'k.itemStyle.normal.lineStyle.color') 
-                           || '#ff3200')
+                        ? (
+                            this.deepQuery(
+                                [this.ecTheme, ecConfig], 'k.itemStyle.normal.lineStyle.color'
+                            ) || '#ff3200'
+                        )
                         : color;
                     break;
                 case 'image':
@@ -591,7 +626,22 @@ define(function (require) {
                 this.myChart
             );
         },
-
+        
+        /**
+         * 产生hover link事件 
+         */
+        __dispatchHoverLink : function(param) {
+            this.messageCenter.dispatch(
+                ecConfig.EVENT.LEGEND_HOVERLINK,
+                param.event,
+                {
+                    target: param.target._name
+                },
+                this.myChart
+            );
+            return;
+        },
+        
         /**
          * 刷新
          */
@@ -599,10 +649,6 @@ define(function (require) {
             if (newOption) {
                 this.option = newOption || this.option;
                 this.option.legend = this.reformOption(this.option.legend);
-                // 补全padding属性
-                this.option.legend.padding = this.reformCssArray(
-                    this.option.legend.padding
-                );
                 this.legendOption = this.option.legend;
                 
                 var data = this.legendOption.data || [];
@@ -624,9 +670,10 @@ define(function (require) {
                     }
                     something = this._getSomethingByName(itemName);
                     if (!something.series) {
-                        this._selectedMap[itemName] = false;
+                        this._hasDataMap[itemName] = false;
                     } 
                     else {
+                        this._hasDataMap[itemName] = true;
                         if (something.data
                             && (something.type === ecConfig.CHART_TYPE_PIE
                                 || something.type === ecConfig.CHART_TYPE_FORCE
@@ -648,7 +695,7 @@ define(function (require) {
                             this.setColor(itemName, color);
                         }
                         this._selectedMap[itemName] = 
-                            typeof this._selectedMap[itemName] != 'undefined'
+                            this._selectedMap[itemName] != null
                             ? this._selectedMap[itemName] : true; 
                     }
                 }
@@ -713,6 +760,7 @@ define(function (require) {
             this.legendOption.data.push(name);
             this.setColor(name,color);
             this._selectedMap[name] = true;
+            this._hasDataMap[name] = true;
         },
 
         del: function (name){
@@ -824,43 +872,29 @@ define(function (require) {
             SectorShape.prototype.buildPath(ctx, {
                 x: x + width / 2,
                 y: y + height + 2,
-                r: height + 2,
+                r: height,
                 r0: 6,
                 startAngle: 45,
                 endAngle: 135
             });
         },
-        /*
-        chord: function (ctx, style) {
+        
+        eventRiver: function (ctx, style) {
             var x = style.x;
             var y = style.y;
             var width = style.width;
             var height = style.height;
             ctx.moveTo(x, y + height);
-            BeziercurveShape.prototype.buildPath(ctx, {
-                xStart: x,
-                yStart: y + height,
-                cpX1: x + width,
-                cpY1: y + height,
-                cpX2: x,
-                cpY2: y + 4,
-                xEnd: x + width,
-                yEnd: y + 4
-            });
+            ctx.bezierCurveTo(
+                x + width, y + height, x, y + 4, x + width, y + 4
+            );
             ctx.lineTo(x + width, y);
-            BeziercurveShape.prototype.buildPath(ctx, {
-                xStart: x + width,
-                yStart: y,
-                cpX1: x,
-                cpY1: y,
-                cpX2: x + width,
-                cpY2: y + height - 4,
-                xEnd: x,
-                yEnd: y + height - 4
-            });
+            ctx.bezierCurveTo(
+                x, y, x + width, y + height - 4, x, y + height - 4
+            );
             ctx.lineTo(x, y + height);
         },
-        */
+        
         k: function (ctx, style) {
             var x = style.x;
             var y = style.y;

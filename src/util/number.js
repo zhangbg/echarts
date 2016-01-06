@@ -2,7 +2,7 @@
  * echarts数字运算相关
  *
  * @desc echarts基于Canvas，纯Javascript图表库，提供直观，生动，可交互，可个性化定制的数据统计图表。
- * @author Kener (@Kener-林峰, linzhifeng@baidu.com)
+ * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
  *
  */
 define(function() {
@@ -61,11 +61,31 @@ define(function() {
         return x[0].replace(/(\d{1,3})(?=(?:\d{3})+(?!\d))/g,'$1,') 
                + (x.length > 1 ? ('.' + x[1]) : '');
     }
+
+    /**
+     * 获取数字的小数位数
+     * @param {number} val
+     */
+    
+    // It is much faster than methods converting number to string as follows 
+    //      var tmp = val.toString();
+    //      return tmp.length - 1 - tmp.indexOf('.');
+    // especially when precision is low
+    function getPrecision(val) {
+        var e = 1;
+        var count = 0;
+        while (Math.round(val * e) / e !== val) {
+            e *= 10;
+            count++;
+        }
+        return count;
+    }
     
     return {
-        parsePercent : parsePercent,
-        parseCenter : parseCenter,
-        parseRadius : parseRadius,
-        addCommas : addCommas
+        parsePercent: parsePercent,
+        parseCenter: parseCenter,
+        parseRadius: parseRadius,
+        addCommas: addCommas,
+        getPrecision: getPrecision
     };
 });

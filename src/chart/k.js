@@ -2,11 +2,10 @@
  * echarts图表类：K线图
  *
  * @desc echarts基于Canvas，纯Javascript图表库，提供直观，生动，可交互，可个性化定制的数据统计图表。
- * @author Kener (@Kener-林峰, linzhifeng@baidu.com)
+ * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
  *
  */
 define(function (require) {
-    var ComponentBase = require('../component/base');
     var ChartBase = require('./base');
     
     // 图形依赖
@@ -17,6 +16,48 @@ define(function (require) {
     require('../component/dataZoom');
     
     var ecConfig = require('../config');
+    // K线图默认参数
+    ecConfig.k = {
+        zlevel: 0,                  // 一级层叠
+        z: 2,                       // 二级层叠
+        clickable: true,
+        hoverable: true,
+        legendHoverLink: false,
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        // barWidth: null               // 默认自适应
+        // barMaxWidth: null            // 默认自适应 
+        itemStyle: {
+            normal: {
+                color: '#fff',          // 阳线填充颜色
+                color0: '#00aa11',      // 阴线填充颜色
+                lineStyle: {
+                    width: 1,
+                    color: '#ff3200',   // 阳线边框颜色
+                    color0: '#00aa11'   // 阴线边框颜色
+                },
+                label: {
+                    show: false
+                    // formatter: 标签文本格式器，同Tooltip.formatter，不支持异步回调
+                    // position: 默认自适应，水平布局为'top'，垂直布局为'right'，可选为
+                    //           'inside'|'left'|'right'|'top'|'bottom'
+                    // textStyle: null      // 默认使用全局文本样式，详见TEXTSTYLE
+                }
+            },
+            emphasis: {
+                // color: 各异,
+                // color0: 各异,
+                label: {
+                    show: false
+                    // formatter: 标签文本格式器，同Tooltip.formatter，不支持异步回调
+                    // position: 默认自适应，水平布局为'top'，垂直布局为'right'，可选为
+                    //           'inside'|'left'|'right'|'top'|'bottom'
+                    // textStyle: null      // 默认使用全局文本样式，详见TEXTSTYLE
+                }
+            }
+        }
+    };
+
     var ecData = require('../util/ecData');
     var zrUtil = require('zrender/tool/util');
     
@@ -27,11 +68,9 @@ define(function (require) {
      * @param {Object} series 数据
      * @param {Object} component 组件
      */
-    function K(ecTheme, messageCenter, zr, option, myChart){
-        // 基类
-        ComponentBase.call(this, ecTheme, messageCenter, zr, option, myChart);
+    function K(ecTheme, messageCenter, zr, option, myChart) {
         // 图表基类
-        ChartBase.call(this);
+        ChartBase.call(this, ecTheme, messageCenter, zr, option, myChart);
 
         this.refresh(option);
     }
@@ -47,13 +86,14 @@ define(function (require) {
 
             // 水平垂直双向series索引 ，position索引到seriesIndex
             var _position2sIndexMap = {
-                top: [ ],
-                bottom: [ ]
+                top: [],
+                bottom: []
             };
             var xAxis;
             for (var i = 0, l = series.length; i < l; i++) {
                 if (series[i].type === ecConfig.CHART_TYPE_K) {
                     series[i] = this.reformOption(series[i]);
+                    this.legendHoverLink = series[i].legendHoverLink || this.legendHoverLink;
                     xAxis = this.component.xAxis.getAxis(series[i].xAxisIndex);
                     if (xAxis.type === ecConfig.COMPONENT_TYPE_AXIS_CATEGORY
                     ) {
@@ -108,12 +148,10 @@ define(function (require) {
             for (var i = 0, l = seriesArray.length; i < l; i++) {
                 serie = series[seriesArray[i]];
                 serieName = serie.name;
-                if (legend){
-                    this.selectedMap[serieName] = legend.isSelected(serieName);
-                } else {
-                    this.selectedMap[serieName] = true;
-                }
-
+                this.selectedMap[serieName] = legend 
+                                              ? legend.isSelected(serieName)
+                                              : true;
+                
                 if (this.selectedMap[serieName]) {
                     locationMap.push(seriesArray[i]);
                 }
@@ -167,11 +205,7 @@ define(function (require) {
                     }
                     
                     data = serie.data[i];
-                    value = data != null
-                            ? (data.value != null
-                              ? data.value
-                              : data)
-                            : '-';
+                    value = this.getDataFromOption(data, '-');
                     if (value === '-' || value.length != 4) {
                         // 数据格式不符
                         continue;
@@ -377,11 +411,15 @@ define(function (require) {
             eColor, eLinewidth, eLineColor
         ) {
             var series = this.series;
+            var serie = series[seriesIndex];
+            var data = serie.data[dataIndex];
+            var queryTarget = [data, serie];
+
             var itemShape = {
-                zlevel: this._zlevelBase,
-                clickable: this.deepQuery(
-                    [series[seriesIndex].data[dataIndex], series[seriesIndex]], 'clickable'
-                ),
+                zlevel: serie.zlevel,
+                z: serie.z,
+                clickable: this.deepQuery(queryTarget, 'clickable'),
+                hoverable: this.deepQuery(queryTarget, 'hoverable'),
                 style: {
                     x: x,
                     y: [y0, y1, y2, y3],
@@ -398,14 +436,18 @@ define(function (require) {
                 },
                 _seriesIndex: seriesIndex
             };
+
+            itemShape = this.addLabel(itemShape, serie, data, name);
+            
             ecData.pack(
                 itemShape,
-                series[seriesIndex], seriesIndex,
-                series[seriesIndex].data[dataIndex], dataIndex,
+                serie, seriesIndex,
+                data, dataIndex,
                 name
             );
             
             itemShape = new CandleShape(itemShape);
+            
             return itemShape;
         },
 
@@ -442,7 +484,7 @@ define(function (require) {
         /**
          * 动画设定
          */
-        addDataAnimation: function (params) {
+        addDataAnimation: function (params, done) {
             var series = this.series;
             var aniMap = {}; // seriesIndex索引参数
             for (var i = 0, l = params.length; i < l; i++) {
@@ -454,6 +496,15 @@ define(function (require) {
             var serie;
             var seriesIndex;
             var dataIndex;
+
+            var aniCount = 0;
+            function animationDone() {
+                aniCount--;
+                if (aniCount === 0) {
+                    done && done();
+                }
+            }
+
              for (var i = 0, l = this.shapeList.length; i < l; i++) {
                 seriesIndex = this.shapeList[i]._seriesIndex;
                 if (aniMap[seriesIndex] && !aniMap[seriesIndex][3]) {
@@ -478,20 +529,26 @@ define(function (require) {
                              ).getGap();
                         x = aniMap[seriesIndex][2] ? dx : -dx;
                         y = 0;
+                        aniCount++;
                         this.zr.animate(this.shapeList[i].id, '')
                             .when(
-                                500,
+                                this.query(this.option, 'animationDurationUpdate'),
                                 { position: [ x, y ] }
                             )
+                            .done(animationDone)
                             .start();
                     }
                 }
+            }
+            
+            // 没有动画
+            if (!aniCount) {
+                done && done();
             }
         }
     };
     
     zrUtil.inherits(K, ChartBase);
-    zrUtil.inherits(K, ComponentBase);
     
     // 图表注册
     require('../chart').define('k', K);

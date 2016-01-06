@@ -1,7 +1,7 @@
 * {
     font-family: "Microsoft YaHei";
 }
-#sidebar-code * {
+.CodeMirror * {
     font-family: sans-serif;
 }
 html {
@@ -37,10 +37,31 @@ body p {
     font-weight: bolder;
     border-bottom: 3px solid rgb(62,152, 197);
 }
+@media (max-width: 980px) {
+    .navbar-default .navbar-nav > li > a {
+        padding-left: 8px;
+        padding-right: 8px;
+    }
+}
 .navbar-default .navbar-nav > li > a:hover {
     background-color: #eee;
 }
-
+.navbar-fixed-top {
+    z-index: 999999;
+}
+.carousel-caption.ecx-link {
+    bottom: 20px;
+}
+.carousel-caption.ecx-link a {
+    font-size:14px;
+    height: 30px;
+    display: block;
+    color:#999;
+}
+.carousel-caption.ecx-link a:hover {
+    color:#eee;
+    text-decoration: none;
+}
 
 blockquote {
     border-width:0;
@@ -124,6 +145,18 @@ hr {
 .team i {
     font-size:12px;
 }
+
+.e-list dt {
+    float: left;
+    clear: left;
+    width: 60px;
+}
+.e-list dd {
+    float: left;
+    clear: right;
+    color: #666;
+}
+
 #footer {
     clear:both;
     background-color: rgb(6, 19, 37);
@@ -191,18 +224,19 @@ hr {
 }
 .col-md-4.ani {
     transition: width 1s;
-    -moz-transition: width 1s; 
-    -webkit-transition: width 1s; 
+    -moz-transition: width 1s;
+    -webkit-transition: width 1s;
     -o-transition: width 1s;
 }
 .col-md-8.ani {
     transition: width 1s;
-    -moz-transition: width 1s; 
+    -moz-transition: width 1s;
     -webkit-transition: width 1s;
-    -o-transition: width 1s; 
+    -o-transition: width 1s;
 }
 .main {
     height: 400px;
+    /*width: 778px !important;*/
     overflow: hidden;
     padding : 10px;
     margin-bottom: 10px;
@@ -343,7 +377,7 @@ table.full {width:100%;}
 .prettyprint {
   margin-top: 8px;
 }
-.prettyprint xmp{   
+.prettyprint xmp{
   margin: 0px;
   padding: 10px;
 }
@@ -408,4 +442,22 @@ table.full {width:100%;}
 }
 .ec-icon-topic {
     background-position: 0 -376px;
+}
+.ec-icon-eventRiver {
+    background-position: 0 -401px;
+}
+.ec-icon-venn {
+    background-position: 0 -426px;
+}
+.ec-icon-treemap {
+    background-position: 0 -451px;
+}
+.ec-icon-wordCloud {
+    background-position: 0 -476px;
+}
+.ec-icon-tree {
+    background-position: 0 -501px;
+}
+.ec-icon-heatmap {
+    background-position: 0 -526px;
 }

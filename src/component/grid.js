@@ -2,7 +2,7 @@
  * echarts组件： 网格
  *
  * @desc echarts基于Canvas，纯Javascript图表库，提供直观，生动，可交互，可个性化定制的数据统计图表。
- * @author Kener (@Kener-林峰, linzhifeng@baidu.com)
+ * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
  *
  */
 define(function (require) {
@@ -12,6 +12,21 @@ define(function (require) {
     var RectangleShape = require('zrender/shape/Rectangle');
     
     var ecConfig = require('../config');
+    // 网格
+    ecConfig.grid = {
+        zlevel: 0,                  // 一级层叠
+        z: 0,                       // 二级层叠
+        x: 80,
+        y: 60,
+        x2: 80,
+        y2: 60,
+        // width: {totalWidth} - x - x2,
+        // height: {totalHeight} - y - y2,
+        backgroundColor: 'rgba(0,0,0,0)',
+        borderWidth: 1,
+        borderColor: '#ccc'
+    };
+
     var zrUtil = require('zrender/tool/util');
 
     /**
@@ -79,7 +94,9 @@ define(function (require) {
         refixAxisShape: function(component) {
             var zeroX;
             var zeroY;
-            var axisList = component.xAxis._axisList.concat(component.yAxis._axisList);
+            var axisList = component.xAxis._axisList.concat(
+                component.yAxis ? component.yAxis._axisList : []
+            );
             var len = axisList.length;
             var axis;
             while (len--) {
@@ -139,7 +156,8 @@ define(function (require) {
                 this._y = this.subPixelOptimize(this._y, gridOption.borderWidth);
     
                 this.shapeList.push(new RectangleShape({
-                    zlevel: this._zlevelBase,
+                    zlevel: this.getZlevelBase(),
+                    z: this.getZBase(),
                     hoverable: false,
                     style: {
                         x: this._x,
